@@ -10,7 +10,7 @@ import { ResultCard } from "@/components/verification/ResultCard";
 import { HowItWorksSection } from "@/components/sections/HowItWorksSection";
 import { FAQSection } from "@/components/sections/FAQSection";
 import { VerificationResult, VerificationState, VerificationStage } from "@/types/verification";
-import { animateHeroReveal, animateResultCard } from "@/lib/gsap";
+import { animateHeroReveal, animateResultCard, smoothCenterInViewport } from "@/lib/gsap";
 import { AlertCircle } from "lucide-react";
 
 export default function HomePage() {
@@ -31,9 +31,18 @@ export default function HomePage() {
     };
   }, []);
 
+  // When result arrives, smoothly scroll to result card first, then trigger reveal animation
   useEffect(() => {
     if (state.result && !state.isLoading) {
-      animateResultCard("#result-card");
+      // Allow DOM to mount the ResultCard
+      requestAnimationFrame(() => {
+        smoothCenterInViewport("#result-card", {
+          duration: 0.5,
+          onComplete: () => {
+            animateResultCard("#result-card");
+          },
+        });
+      });
     }
   }, [state.result, state.isLoading]);
 
@@ -49,6 +58,13 @@ export default function HomePage() {
       error: null,
     });
     setProgressPercent(10);
+
+    // Smoothly scroll and center the loading pipeline immediately
+    requestAnimationFrame(() => {
+      smoothCenterInViewport("#verification-loader-container", {
+        duration: 0.5,
+      });
+    });
 
     try {
       console.log(`[Client] Initiating SSE stream from /api/verify/stream...`);

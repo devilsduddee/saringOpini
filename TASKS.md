@@ -220,6 +220,7 @@ Status:
 
 - **Performance Optimization**: Latensi dipangkas $\ge 75\%$, fallback instan snippet Tavily, penghapusan bundle `useTransition` yang tidak perlu.
 - **Accessibility (a11y)**: Fokus programatis Result Card, relasi ARIA accordion FAQ, semantik progressbar dan live region, kontras teks $\ge 4.5:1$, target sentuh $\ge 44\text{px}$.
+- **Verification Flow UX (Auto-Scroll)**: Mengimplementasikan `smoothCenterInViewport` GSAP (`power2.out`, 0.5s) yang secara otomatis memusatkan kartu loading saat verifikasi dimulai dan mendarat mulus pada Result Card saat analisis selesai tanpa scrolling manual.
 - **Motion System**: GSAP 3 smooth scroll antar seksi, transisi step loading dinamis, interpolasi angka confidence gauge, isolasi `prefers-reduced-motion`.
 - **Pipeline Reliability**: Alur SSE murni tanpa timer tiruan, parsing markdown/JSON OpenRouter yang tahan sanitasi, penanganan kegagalan scraping bertingkat.
 - **Source Relevance (Anti False-Positive)**: Algoritma penilai relevansi geografis (skor $\ge 60/100$) dan syarat minimal 2 sumber konfirmasi sebelum menyatakan fakta.
@@ -267,6 +268,7 @@ Status:
 - **Result Card Focus Management**: Mengarahkan fokus pembaca layar dan keyboard otomatis ke hasil analisis.
 - **FAQ ARIA Accessibility**: Menghubungkan ID panel dengan `aria-controls` pada setiap tombol accordion FAQ.
 - **Navbar Redundancy**: Menghilangkan tautan ganda "Verifikasi" dan memprioritaskan tombol aksi utama "Periksa Cepat".
+- **Verification Flow Viewport Friction**: Mengimplementasikan auto-scroll cerdas berbasis GSAP (`smoothCenterInViewport`) saat verifikasi dimulai dan saat data hasil tiba, sehingga pengguna mobile (320px–430px) maupun desktop tidak perlu menggulir halaman secara manual.
 - **Hero Vertical Rhythm**: Merapatkan jarak vertikal Hero dengan formulir utama untuk pengalaman *tool-first*.
 - **Mobile Menu Drawer Stacking**: Memperbaiki arsitektur laci navigasi mobile menjadi *fixed overlay* di luar header.
 - **Anti-Slop Cleanups**: Menghapus komentar slop bernomor dan mengganti kartu tiruan dengan diagram arsitektur asli.

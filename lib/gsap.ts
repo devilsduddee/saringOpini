@@ -364,6 +364,71 @@ export const smoothScrollToSection = (
 
 
 /**
+ * Smoothly scroll and center target element in the viewport with GSAP power2.out
+ * Perfect for mobile & desktop verification pipeline transition
+ */
+export const smoothCenterInViewport = (
+  target: string | HTMLElement,
+  options?: {
+    duration?: number;
+    offsetY?: number;
+    onComplete?: () => void;
+  }
+) => {
+  if (typeof window === "undefined") return;
+
+  const targetEl = typeof target === "string" ? document.querySelector(target) : target;
+  if (!targetEl) return;
+
+  const rect = targetEl.getBoundingClientRect();
+  const currentScrollY = window.scrollY;
+  const viewportHeight = window.innerHeight;
+  const elementHeight = rect.height;
+
+  // Compute ideal scroll position to center element in viewport
+  // For large cards taller than viewport, align near top with breathing space below sticky navbar
+  const navbarHeight = 64;
+  let targetScrollY: number;
+
+  if (elementHeight + navbarHeight + 32 >= viewportHeight) {
+    // Tall element: align to top just under the navbar with 20px breathing room
+    targetScrollY = currentScrollY + rect.top - navbarHeight - 20;
+  } else {
+    // Shorter element: center vertically in the remaining space under the navbar
+    const availableSpace = viewportHeight - navbarHeight;
+    const centerOffset = (availableSpace - elementHeight) / 2;
+    targetScrollY = currentScrollY + rect.top - navbarHeight - Math.max(16, centerOffset);
+  }
+
+  // Adjust with optional offset and clamp to 0
+  if (options?.offsetY) {
+    targetScrollY += options.offsetY;
+  }
+  targetScrollY = Math.max(0, targetScrollY);
+
+  if (prefersReducedMotion()) {
+    window.scrollTo({ top: targetScrollY, behavior: "auto" });
+    if (options?.onComplete) options.onComplete();
+    return;
+  }
+
+  const duration = options?.duration ?? 0.5; // 0.4s - 0.6s range
+  const scrollObj = { y: currentScrollY };
+
+  gsap.to(scrollObj, {
+    y: targetScrollY,
+    duration,
+    ease: "power2.out",
+    onUpdate: () => {
+      window.scrollTo(0, scrollObj.y);
+    },
+    onComplete: () => {
+      if (options?.onComplete) options.onComplete();
+    },
+  });
+};
+
+/**
  * Smooth auto scroll into view if element is below viewport
  */
 export const smoothAutoScroll = (element: HTMLElement | null) => {
