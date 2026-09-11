@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-primary: #0D0D0D;
+    --bg-secondary: #141414;
+    --bg-surface: #1C1C1C;
+    --accent: #FFD12F;
+    --accent-hover: #FFE164;
+    --accent-active: #F7C400;
+    --status-fact: #22C55E;
+    --status-hoax: #EF4444;
+    --status-uncertain: #F59E0B;
+    --text-primary: #FFFFFF;
+    --text-secondary: #A1A1AA;
+    --text-muted: #71717A;
+    --border-subtle: #27272A;
+    --border-accent: #FFD12F;
+  }
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-inter), system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Neo-Brutalism Custom Utilities */
+.neo-border {
+  border: 3px solid var(--accent);
+}
+
+.neo-border-subtle {
+  border: 1px solid var(--border-subtle);
+}
+
+.neo-shadow {
+  box-shadow: 4px 4px 0px 0px var(--accent);
+}
+
+/* Precise Line Heights and Letter Spacing for Brutalist Headline */
+.hero-headline {
+  font-size: clamp(44px, 7vw, 92px);
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+  font-weight: 900;
+}
+
+.section-headline {
+  font-size: clamp(28px, 4.5vw, 48px);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+
+/* Micro-interactions */
+button, a {
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), 
+              background-color 160ms cubic-bezier(0.23, 1, 0.32, 1), 
+              border-color 160ms cubic-bezier(0.23, 1, 0.32, 1),
+              box-shadow 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+button:active, a:active {
+  transform: scale(0.97);
+}
+
+/* Accessibility Focus Management: Clean mouse clicks, high-contrast keyboard navigation */
+:focus:not(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
