@@ -218,13 +218,21 @@ Status:
 
 ## Optimasi yang Sudah Dilakukan
 
+- **Source Credibility Tiers & Mainstream Media Bias (P0)**: Mengimplementasikan sistem tingkatan kredibilitas media (*Tier 1: Dewan Pers & Arus Utama*, *Tier 2: Portal Berita Nasional/Regional Terdaftar*, *Tier 3: Blog/Forum/Agregator Tidak Terverifikasi*). Memperbarui prompt ekstraksi kueri agar memprioritaskan media arus utama, memberi label `[TIER 1/2/3]` pada konteks fakta, menyaring/membuang sumber Tier 3 sebelum dikirim ke sintesis AI jika $\ge 2$ sumber Tier 1/2 tersedia, dan membatasi keyakinan (*confidence cap*) jika bukti tidak bersumber dari media primer.
+- **Event-Level Incident Corroboration & Tag Page Penalty (P0)**: Mengembangkan engine penilaian relevansi sumber berbasis peristiwa inti (*core incident action*). Menerapkan penalti keras (-50 poin) untuk halaman indeks/tag/kategori/arsip (`/tag/`, `/topik/`), penalti (-30 poin) untuk artikel yang berada di lokasi sama tetapi membahas peristiwa/kasus berbeda, dan bonus signifikan (+35 poin) untuk artikel yang mencocokkan kata kerja aksi dan aktor peristiwa yang sama secara presisi.
+- **URL Retrieval Resilience & Fallback Hierarchy (P0)**: Menerapkan pemulihan metadata URL bertingkat (*Jina Scraping ➔ Tavily Search URL Metadata Recovery ➔ URL Slug Title Extractor*). Menghilangkan string fallback generik `"Artikel Berita"` sehingga kegagalan scraping pada portal berita terproteksi (seperti Detik/Kompas) tetap menghasilkan entitas terstruktur dan kueri jurnalistik tajam.
+
 - **Performance Optimization**: Latensi dipangkas $\ge 75\%$, fallback instan snippet Tavily, penghapusan bundle `useTransition` yang tidak perlu.
 - **Accessibility (a11y)**: Fokus programatis Result Card, relasi ARIA accordion FAQ, semantik progressbar dan live region, kontras teks $\ge 4.5:1$, target sentuh $\ge 44\text{px}$.
 - **Verification Flow UX (Auto-Scroll)**: Mengimplementasikan `smoothCenterInViewport` GSAP (`power2.out`, 0.5s) yang secara otomatis memusatkan kartu loading saat verifikasi dimulai dan mendarat mulus pada Result Card saat analisis selesai tanpa scrolling manual.
 - **Motion System**: GSAP 3 smooth scroll antar seksi, transisi step loading dinamis, interpolasi angka confidence gauge, isolasi `prefers-reduced-motion`.
 - **Pipeline Reliability**: Alur SSE murni tanpa timer tiruan, parsing markdown/JSON OpenRouter yang tahan sanitasi, penanganan kegagalan scraping bertingkat.
-- **Source Relevance (Anti False-Positive)**: Algoritma penilai relevansi geografis (skor $\ge 60/100$) dan syarat minimal 2 sumber konfirmasi sebelum menyatakan fakta.
+- **Multi-Query Structured Entity Retrieval**: Mengekstraksi 6 dimensi entitas (*event*, *location*, *people*, *organizations*, *numbers*, *dates*) dari input URL dan memicu penelusuran 3 varian kueri (*Query A: Specific Event*, *Query B: Entity-Focused*, *Query C: Location-Focused*) secara paralel ke Tavily untuk memastikan berita pembanding atas peristiwa yang sama ditemukan secara komprehensif.
+- **Journalistic Query Compression (4–8 Keywords)**: Mengompresi kueri pencarian menjadi 4–8 kata kunci padat dan menghapus penambahan suffix kaku (`"berita cek fakta indonesia"`), sehingga Tavily melakukan pencarian berita langsung (*direct event matching*).
+- **Publisher Dateline vs Event Location Filtering**: Membedakan lokasi redaksi/biro pers umum (*Jakarta, Semarang, Surabaya, Bandung*) dari lokasi peristiwa sebenarnya agar artikel berita kredibel yang menyebutkan lokasi biro tidak terkena penalti lokasi palsu.
+- **Retrieval Observability & Diagnostics**: Mencatat kueri yang digenerasi, jumlah kandidat Tavily, artikel yang diterima (`>= 60`), serta rincian alasan penolakan artikel yang tidak cocok (`< 60`) di server log secara real-time.
 - **Error Handling**: Pesan error ramah pengguna berbahasa Indonesia, penanganan timeout jaringan gracefully, batas error global Next.js.
+
 
 ---
 
@@ -232,6 +240,9 @@ Status:
 
 ```
 [ User Input (URL / Teks Broadcast) ]
+                │
+                ▼
+[ Multi-Layer URL Recovery (Jina / Tavily / Slug) ]
                 │
                 ▼
    [ 1. Query & Entity Extraction ] ── (OpenRouter AI - JSON Mode)
@@ -260,9 +271,11 @@ Status:
 ## Isu yang Diselesaikan
 
 ### P0 (Kritikal / Blocker)
+- **Generic Fallback Regression ("Artikel Berita")**: Memperbaiki kerentanan pada input URL berita ketika Jina Reader timeout/diblokir anti-bot, yang sebelumnya memicu fallback string `"Artikel Berita"`. Digantikan dengan ekstraksi cerdas slug URL (`extractSlugTitle`) dan pemulihan metadata via Tavily (`recoverUrlMetadataViaTavily`).
 - **Dead Code Duplication**: Menghapus `actions/verify.ts` (382 baris) dan folder `temp-app/` agar pipeline verifikasi memiliki kebenaran tunggal (*single source of truth*) pada `/api/verify/stream`.
 - **Latency Bottleneck**: Memangkas timeout dan retry OpenRouter, Jina, dan Tavily untuk memangkas latensi eksekusi terburuk dari ~86s menjadi ~20–26s.
 - **Strict Schema Failure on Uncertain Claims**: Menyesuaikan skema validasi Zod dengan `.superRefine()` agar klaim spekulatif (`TIDAK_DAPAT_DIPASTIKAN`) dengan `ringkasanFakta: []` tidak mengalami error validasi palsu.
+
 
 ### P1 (Kualitas / UX / Aksesibilitas)
 - **Result Card Focus Management**: Mengarahkan fokus pembaca layar dan keyboard otomatis ke hasil analisis.

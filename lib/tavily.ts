@@ -56,7 +56,7 @@ export async function searchNewsArticles(
 
   const strictPayload = {
     api_key: apiKey,
-    query: `${query} berita cek fakta indonesia`,
+    query,
     search_depth: "basic",
     include_domains: [
       "detik.com",
@@ -70,6 +70,11 @@ export async function searchNewsArticles(
       "republika.co.id",
       "tribunnews.com",
       "kumparan.com",
+      "metrotvnews.com",
+      "bloombergtechnoz.com",
+      "mediaindonesia.com",
+      "bbc.com",
+      "reuters.com",
     ],
     max_results: maxResults,
   };
@@ -145,3 +150,44 @@ export async function searchNewsArticles(
     );
   }
 }
+
+/**
+ * Recovers article title and snippet directly from Tavily when scraping fails or returns empty.
+ */
+export async function recoverUrlMetadataViaTavily(
+  url: string,
+  apiKey: string
+): Promise<{ title: string; snippet: string } | null> {
+  console.log(`[START] Tavily URL Metadata Recovery (url: ${url})`);
+  const t0 = performance.now();
+
+  try {
+    const payload = {
+      api_key: apiKey,
+      query: url,
+      search_depth: "basic",
+      max_results: 3,
+    };
+
+    const response = await fetchTavilyWithTimeout(payload, 5000);
+    if (!response.ok) return null;
+
+    const json = await response.json();
+    const parsed = tavilyResponseSchema.safeParse(json);
+    if (!parsed.success || parsed.data.results.length === 0) return null;
+
+    // Find the exact match or first result
+    const match = parsed.data.results.find((r) => r.url.includes(url) || url.includes(r.url)) || parsed.data.results[0];
+    const duration = (performance.now() - t0).toFixed(0);
+    console.log(`[END] Tavily URL Metadata Recovery - Success (${duration}ms, title: "${match.title.slice(0, 50)}...")`);
+
+    return {
+      title: match.title,
+      snippet: match.content,
+    };
+  } catch (err) {
+    console.warn(`[Tavily] URL metadata recovery failed for ${url}:`, err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+

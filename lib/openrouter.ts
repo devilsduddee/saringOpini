@@ -1,4 +1,5 @@
 import { verificationResultSchema, VerificationResultPayload } from "@/lib/schemas";
+import { safeParseJsonFromLLM, domainTier } from "@/lib/utils";
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -75,12 +76,25 @@ async function callOpenRouterWithRetry(
       }
 
       const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{
+          message?: {
+            content?: string;
+            reasoning?: string;
+          };
+        }>;
       };
 
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error("OpenRouter mengembalikan respon kosong.");
+      const messageObj = data.choices?.[0]?.message;
+      let content = messageObj?.content;
+
+      // Fallback: If content is empty or null, check if the reasoning field contains the JSON payload
+      if (!content || !content.trim()) {
+        if (messageObj?.reasoning && messageObj.reasoning.includes("{") && messageObj.reasoning.includes("}")) {
+          console.warn("[OpenRouter] Main content was empty, extracting JSON from reasoning channel...");
+          content = messageObj.reasoning;
+        } else {
+          throw new Error("OpenRouter mengembalikan respon kosong.");
+        }
       }
 
       return content;
@@ -106,12 +120,15 @@ async function callOpenRouterWithRetry(
 }
 
 export interface ArticleEntities {
-  title: string;
-  location?: string;
-  organization?: string;
-  date?: string;
-  keyEntities: string[];
-  searchQuery: string;
+  event: string;
+  location: string;
+  people: string[];
+  organizations: string[];
+  numbers: string[];
+  dates: string[];
+  queryA: string; // Most specific event query
+  queryB: string; // Entity-focused query
+  queryC: string; // Location-focused query
 }
 
 export async function extractArticleEntities(
@@ -124,28 +141,36 @@ export async function extractArticleEntities(
   console.log(`[START] Entity Extraction for URL (title: "${articleTitle.slice(0, 50)}...")`);
   const t0 = performance.now();
 
-  const systemPrompt = `Anda adalah asisten AI ekstraktor entitas kejadian berita untuk cross-checking fact-checking Indonesia.
+  const systemPrompt = `Anda adalah asisten AI ekstraktor entitas kejadian berita untuk cross-checking fact-checking Indonesia (Saring Opini).
 Tugas Anda:
-1. Baca judul dan ringkasan artikel berikut.
+1. Baca judul dan isi artikel berikut.
 2. Identifikasi dan ekstrak entitas kunci kejadian:
-   - title: judul inti
-   - location: kota/kabupaten/daerah spesifik kejadian (misal: "Pati", "Sragen", "Agam", "Surabaya")
-   - organization: instansi/sekolah/lembaga terlibat jika ada
-   - date: estimasi waktu/tanggal kejadian jika ada
-   - keyEntities: 3-5 kata kunci unik spesifik peristiwa (nama tempat, angka korban/siswa, instansi)
-   - searchQuery: Buat 1 query pencarian spesifik yang menggabungkan peristiwa + LOKASI SPESIFIK + angka/entitas unik (misal: "keracunan MBG Pati 269 siswa" BUKAN hanya "keracunan MBG").
+   - event: nama peristiwa faktual inti dalam Bahasa Indonesia
+   - location: nama kota/kabupaten spesifik (Contoh: "Pati", "Jayawijaya", "Sragen", "Agam"). JANGAN masukkan kalimat panjang.
+   - people: pelaku dan korban inti (tanpa kata sifat sensasional)
+   - organizations: instansi resmi, sekolah, atau lembaga (contoh: "KKB", "Dinas Kesehatan", "Polres")
+   - numbers: angka/statistik signifikan (misal: "269 siswa")
+   - dates: waktu/tanggal kejadian jika ada
+3. ATURAN GENERASI KUERI PENCARIAN (PRIORITAS MEDIA UTAMA):
+   - queryA (Peristiwa Inti + Lokasi + Entitas Kunci): Buat query pencarian yang menggabungkan peristiwa + LOKASI SPESIFIK + angka/entitas unik. PRIORITASKAN kueri yang memunculkan hasil dari media arus utama terpercaya (contoh: CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia). Hindari kata kunci generik.
+   - queryB (Kombinasi Instansi/Pelaku + Peristiwa + Lokasi)
+   - queryC (Laporan Resmi / Tindak Lanjut + Daerah)
+   - Format: 4-8 kata kunci jurnalistik padat.
 
-Output WAJIB berupa JSON:
+Output WAJIB berupa JSON valid:
 {
-  "title": string,
+  "event": string,
   "location": string,
-  "organization": string,
-  "date": string,
-  "keyEntities": string[],
-  "searchQuery": string
+  "people": string[],
+  "organizations": string[],
+  "numbers": string[],
+  "dates": string[],
+  "queryA": string,
+  "queryB": string,
+  "queryC": string
 }`;
 
-  const userPrompt = `JUDUL ARTIKEL: ${articleTitle}\nISI ARTIKEL:\n"""\n${articleText.slice(0, 2500)}\n"""`;
+  const userPrompt = `JUDUL ARTIKEL: ${articleTitle}\nISI ARTIKEL:\n"""\n${articleText.slice(0, 2800)}\n"""`;
 
   try {
     const rawJson = await callOpenRouterWithRetry(
@@ -163,26 +188,44 @@ Output WAJIB berupa JSON:
     const parsed = JSON.parse(cleaned) as ArticleEntities;
 
     const duration = (performance.now() - t0).toFixed(0);
-    console.log(`[END] Entity Extraction - Location: "${parsed.location || 'N/A'}", Entities: [${(parsed.keyEntities || []).join(', ')}], Query: "${parsed.searchQuery}" (${duration}ms)`);
+    console.log(`[END] Entity Extraction - Event: "${parsed.event || 'N/A'}", Loc: "${parsed.location || 'N/A'}" (${duration}ms)`);
+    console.log(`[Queries Generated] A: "${parsed.queryA}", B: "${parsed.queryB}", C: "${parsed.queryC}"`);
+
+    const safeTitle = (articleTitle && articleTitle !== "Artikel Berita" && articleTitle !== "Artikel Berita Pembanding") 
+      ? articleTitle 
+      : (articleText.slice(0, 100).trim() || "Peristiwa Berita");
+
+    const defaultQueryA = `${parsed.event || safeTitle} ${parsed.location || ""}`.trim();
 
     return {
-      title: parsed.title || articleTitle,
+      event: parsed.event || safeTitle,
       location: parsed.location || "",
-      organization: parsed.organization || "",
-      date: parsed.date || "",
-      keyEntities: Array.isArray(parsed.keyEntities) ? parsed.keyEntities : [],
-      searchQuery: parsed.searchQuery || `${articleTitle} ${parsed.location || ''}`.trim(),
+      people: Array.isArray(parsed.people) ? parsed.people : [],
+      organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
+      numbers: Array.isArray(parsed.numbers) ? parsed.numbers : [],
+      dates: Array.isArray(parsed.dates) ? parsed.dates : [],
+      queryA: parsed.queryA && parsed.queryA !== "Artikel Berita" ? parsed.queryA : defaultQueryA,
+      queryB: parsed.queryB && parsed.queryB !== "Artikel Berita" ? parsed.queryB : (parsed.queryA || defaultQueryA),
+      queryC: parsed.queryC && parsed.queryC !== "Artikel Berita" ? parsed.queryC : (parsed.queryA || defaultQueryA),
     };
   } catch (err) {
     const duration = (performance.now() - t0).toFixed(0);
     console.warn(`[END] Entity Extraction - Fallback used (${duration}ms):`, err instanceof Error ? err.message : err);
+    
+    const safeTitle = (articleTitle && articleTitle !== "Artikel Berita" && articleTitle !== "Artikel Berita Pembanding") 
+      ? articleTitle 
+      : (articleText.slice(0, 100).trim() || "Peristiwa Berita");
+
     return {
-      title: articleTitle,
+      event: safeTitle,
       location: "",
-      organization: "",
-      date: "",
-      keyEntities: [],
-      searchQuery: articleTitle,
+      people: [],
+      organizations: [],
+      numbers: [],
+      dates: [],
+      queryA: safeTitle,
+      queryB: safeTitle,
+      queryC: safeTitle,
     };
   }
 }
@@ -196,11 +239,13 @@ export async function extractSearchQuery(
   console.log(`[START] Query Extraction (rawText length: ${rawText.length})`);
   const t0 = performance.now();
 
-  const systemPrompt = `Anda adalah asisten AI ekstraktor kata kunci pencarian berita untuk fact-checking.
+  const systemPrompt = `Anda adalah asisten AI ekstraktor kata kunci pencarian berita untuk fact-checking cross-checking Indonesia.
 Tugas Anda:
 1. Baca teks/klaim berikut.
 2. Identifikasi topik spesifik, LOKASI/KOTA spesifik jika ada, dan entitas utama.
-3. Ekstrak inti klaim menjadi 1 kalimat query pencarian Google/berita yang netral, padat, dan efektif dalam Bahasa Indonesia. Sertakan nama kota/daerah jika teks menyebutkan tempat spesifik.
+3. Ekstrak inti klaim menjadi 1 kalimat query pencarian Google/berita yang netral, padat, dan efektif dalam Bahasa Indonesia.
+   PRIORITASKAN query yang akan memunculkan hasil dari media arus utama terpercaya (contoh: CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia).
+   Hindari kata kunci generik yang memunculkan blog pribadi atau forum.
 4. Hapus kata-kata ajakan klik ("klik link ini", "bagikan ke 5 grup", "ketik amin").
 5. JANGAN tambahkan penjelasan apapun, HANYA kembalikan teks query pencarian saja.`;
 
@@ -239,6 +284,14 @@ export async function analyzeFactClaim(
 PRIMARY OBJECTIVE:
 Determine whether the provided "KLAIM PENGGUNA" is supported by credible evidence referring strictly to the SAME EVENT.
 
+SOURCE CREDIBILITY TIERS (apply BEFORE same-event rules):
+- TIER 1 (Highest trust): CNN Indonesia, Kompas.com, Detik.com, Tempo.co, Antara News, Metro TV News, Bloomberg Technoz/Bloomberg Indonesia, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia, Reuters Indonesia, official government (.go.id) domains.
+- TIER 2 (Moderate trust): other established regional/national news outlets not listed above.
+- TIER 3 (Low trust / DO NOT USE for FAKTA or HOAX verdicts): blogs, forums, unverified aggregator sites, social media reposts, sites with no clear editorial identity.
+- If ALL available sources are Tier 3, return "TIDAK_DAPAT_DIPASTIKAN" regardless of how many sources agree.
+- If Tier 1/2 sources conflict with Tier 3 sources, DISREGARD the Tier 3 sources entirely.
+- confidenceScore should be capped lower (max ~50) when the best available source is only Tier 2, and further capped (max ~20) if any Tier 3 source is mixed in.
+
 CRITICAL SAME-EVENT CORROBORATION RULES:
 1. SAME TOPIC DOES NOT EQUAL SAME EVENT:
    - Do NOT use or corroborate sources merely because they share general keywords (e.g. "keracunan MBG", "kebakaran", "demonstrasi").
@@ -248,22 +301,19 @@ CRITICAL SAME-EVENT CORROBORATION RULES:
      ✅ Same Date Range & Organization involved
 2. STRICT REJECTION OF UNRELATED INCIDENTS:
    - REJECT and DISREGARD sources from a different city, different province, different school/institution, different victim count, or different incident timeline.
-   - Example: If the claim is about "Keracunan MBG di Pati", sources reporting "Keracunan MBG di Agam" or "Sragen" are UNRELATED INCIDENTS and must NOT be used to prove or disprove the Pati incident.
 3. MINIMUM SOURCE THRESHOLD:
-   - If fewer than 2 reliable, matching sources exist that confirm the same specific event:
+   - If fewer than 2 reliable, matching Tier 1/Tier 2 sources exist that confirm the same specific event:
      Return status: "TIDAK_DAPAT_DIPASTIKAN" with a clear analytical explanation stating that evidence for this specific event is insufficient, rather than making assumptions.
 4. STATUS DEFINITIONS & RINGKASAN FAKTA RULES:
-   - "FAKTA": If credible official news articles explicitly confirm the truth of this specific event. (ringkasanFakta must contain 1-3 confirmed key facts).
+   - "FAKTA": If credible Tier 1/2 official news articles explicitly confirm the truth of this specific event. (ringkasanFakta must contain 1-3 confirmed key facts).
    - "HOAX": If official sources debunk the claim, expose it as a fabrication/scam, or prove it false. (ringkasanFakta must contain supporting debunking findings).
    - "TIDAK_DAPAT_DIPASTIKAN": If evidence is conflicting, insufficient, or from unrelated regions.
      IMPORTANT FOR TIDAK_DAPAT_DIPASTIKAN:
      - DO NOT invent facts.
      - DO NOT fabricate evidence.
-     - DO NOT create fake supporting points.
      - Return "ringkasanFakta": [] (empty array) when no reliable verified facts can be extracted.
 5. CONFIDENCE SCORE (0-100):
-   - Must strictly reflect: source quality, source agreement, and same-event relevance.
-   - Never assign a high confidence score if evidence originates from unrelated incidents.
+   - Integer between 0 and 100 (e.g. 95, NOT 0.95).
 
 OUTPUT FORMAT REQUIREMENTS:
 - Return ONLY a valid, parseable JSON object matching this exact schema:
@@ -276,13 +326,13 @@ OUTPUT FORMAT REQUIREMENTS:
 - Do NOT include markdown formatting, code fences (\`\`\`json), or conversational text outside the JSON.`;
 
   const articlesContext = scrapedArticles
-    .map(
-      (art, i) =>
-        `--- SUMBER ${i + 1}: ${art.title} (${art.domain}) ---\nURL: ${art.url}\nIsi:\n${art.content.slice(0, 2500)}\n`
-    )
+    .map((art, i) => {
+      const tier = domainTier(art.url);
+      return `--- SUMBER ${i + 1} [TIER ${tier}]: ${art.title} (${art.domain}) ---\nURL: ${art.url}\nIsi:\n${art.content.slice(0, 2500)}\n`;
+    })
     .join("\n\n");
 
-  const userPrompt = `KLAIM PENGGUNA:\n"""\n${originalClaim}\n"""\n\nARTIKEL BERITA PEMBANDING:\n${articlesContext}\n\nEvaluasi kecocokan kejadian spesifik (lokasi, entitas, insiden). Kembalikan HANYA JSON.`;
+  const userPrompt = `KLAIM PENGGUNA:\n"""\n${originalClaim}\n"""\n\nARTIKEL BERITA PEMBANDING DENGAN LABEL TIER KREDIBILITAS:\n${articlesContext}\n\nEvaluasi kecocokan kejadian spesifik (lokasi, entitas, insiden) dan bobot kredibilitas TIER sumber. Kembalikan HANYA JSON.`;
 
   const rawJson = await callOpenRouterWithRetry(
     apiKey,
@@ -295,10 +345,8 @@ OUTPUT FORMAT REQUIREMENTS:
     1
   );
 
-  const cleanedJson = rawJson.replace(/^```json\s*|\s*```$/g, "").trim();
-
   try {
-    const parsed = JSON.parse(cleanedJson);
+    const parsed = safeParseJsonFromLLM(rawJson);
 
     const payloadWithSources = {
       ...parsed,
@@ -323,17 +371,7 @@ OUTPUT FORMAT REQUIREMENTS:
   } catch (err) {
     const duration = (performance.now() - t0).toFixed(0);
     console.error(`[CRITICAL JSON PARSE / VALIDATION FAILURE] (${duration}ms) Model: ${model}`, err);
-
-    if (err instanceof SyntaxError) {
-      const matchPos = err.message.match(/position (\d+)/i) || err.message.match(/column (\d+)/i);
-      if (matchPos && matchPos[1]) {
-        const pos = parseInt(matchPos[1], 10);
-        const snippetStart = Math.max(0, pos - 40);
-        const snippetEnd = Math.min(cleanedJson.length, pos + 40);
-        console.error(`Failure Character Position: ${pos}, Context: "...${cleanedJson.slice(snippetStart, pos)}👉[HERE]👈${cleanedJson.slice(pos, snippetEnd)}..."`);
-      }
-    }
-
     throw new Error(`Gagal memvalidasi output analisis AI: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+

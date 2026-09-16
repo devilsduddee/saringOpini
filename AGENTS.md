@@ -79,6 +79,9 @@ Selalu gunakan skill berikut saat relevan:
 
 - performance-optimization
 
+## Documentation
+- documentation-and-adrs
+
 ---
 
 # Architecture Rules

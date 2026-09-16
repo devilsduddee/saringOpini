@@ -1,3 +1,5 @@
+import { extractSlugTitle } from "@/lib/utils";
+
 export async function scrapeCleanArticle(
   url: string,
   apiKey?: string,
@@ -41,12 +43,15 @@ export async function scrapeCleanArticle(
       const rawMarkdown = await response.text();
 
       const lines = rawMarkdown.split("\n");
-      let title = "Artikel Berita Pembanding";
+      let title = extractSlugTitle(url) || "Artikel Berita";
 
       for (const line of lines) {
         if (line.startsWith("# ")) {
-          title = line.replace(/^#\s+/, "").trim();
-          break;
+          const heading = line.replace(/^#\s+/, "").trim();
+          if (heading && !heading.toLowerCase().includes("page not found") && !heading.toLowerCase().includes("access denied")) {
+            title = heading;
+            break;
+          }
         }
       }
 
@@ -73,10 +78,12 @@ export async function scrapeCleanArticle(
   }
 
   const duration = (performance.now() - t0).toFixed(0);
-  console.warn(`[END] Jina Scraping - Fast fallback used (${duration}ms) for ${url}`);
+  const fallbackTitle = extractSlugTitle(url) || "";
+  console.warn(`[END] Jina Scraping - Fast fallback used (${duration}ms) for ${url} (recovered title: "${fallbackTitle}")`);
 
   return {
-    title: "Artikel Berita",
+    title: fallbackTitle,
     content: "",
   };
 }
+
