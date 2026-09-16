@@ -218,7 +218,9 @@ Status:
 
 ## Optimasi yang Sudah Dilakukan
 
+- **Multi-Provider AI Fallback Engine (OpenRouter + Groq) (P0)**: Mengintegrasikan provider AI ganda (*OpenRouter* sebagai primary/default dan *Groq* sebagai fast fallback/alternative) dengan konfigurasi model dinamis via `.env` (`GROQ_API_KEY`, `GROQ_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`). Pipeline otomatis beralih ke provider cadangan jika provider utama mengalami rate limit (429), server error (5xx), atau timeout.
 - **Source Credibility Tiers & Mainstream Media Bias (P0)**: Mengimplementasikan sistem tingkatan kredibilitas media (*Tier 1: Dewan Pers & Arus Utama*, *Tier 2: Portal Berita Nasional/Regional Terdaftar*, *Tier 3: Blog/Forum/Agregator Tidak Terverifikasi*). Memperbarui prompt ekstraksi kueri agar memprioritaskan media arus utama, memberi label `[TIER 1/2/3]` pada konteks fakta, menyaring/membuang sumber Tier 3 sebelum dikirim ke sintesis AI jika $\ge 2$ sumber Tier 1/2 tersedia, dan membatasi keyakinan (*confidence cap*) jika bukti tidak bersumber dari media primer.
+
 - **Event-Level Incident Corroboration & Tag Page Penalty (P0)**: Mengembangkan engine penilaian relevansi sumber berbasis peristiwa inti (*core incident action*). Menerapkan penalti keras (-50 poin) untuk halaman indeks/tag/kategori/arsip (`/tag/`, `/topik/`), penalti (-30 poin) untuk artikel yang berada di lokasi sama tetapi membahas peristiwa/kasus berbeda, dan bonus signifikan (+35 poin) untuk artikel yang mencocokkan kata kerja aksi dan aktor peristiwa yang sama secara presisi.
 - **URL Retrieval Resilience & Fallback Hierarchy (P0)**: Menerapkan pemulihan metadata URL bertingkat (*Jina Scraping ➔ Tavily Search URL Metadata Recovery ➔ URL Slug Title Extractor*). Menghilangkan string fallback generik `"Artikel Berita"` sehingga kegagalan scraping pada portal berita terproteksi (seperti Detik/Kompas) tetap menghasilkan entitas terstruktur dan kueri jurnalistik tajam.
 

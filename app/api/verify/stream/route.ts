@@ -333,12 +333,19 @@ export async function POST(req: NextRequest) {
             content: primaryScraped.content,
           };
 
+          const aiConfig = {
+            openrouterApiKey: env.OPENROUTER_API_KEY,
+            openrouterModel: env.OPENROUTER_MODEL,
+            groqApiKey: env.GROQ_API_KEY,
+            groqModel: env.GROQ_MODEL,
+          };
+
           const entities = await extractArticleEntities(
             primaryScraped.content,
             primaryScraped.title,
-            env.OPENROUTER_API_KEY,
-            env.OPENROUTER_MODEL
+            aiConfig
           );
+
 
 
           sendEvent({
@@ -440,7 +447,14 @@ export async function POST(req: NextRequest) {
             progressPercent: 25,
           });
 
-          const searchQuery = await extractSearchQuery(query, env.OPENROUTER_API_KEY, env.OPENROUTER_MODEL);
+          const aiConfig = {
+            openrouterApiKey: env.OPENROUTER_API_KEY,
+            openrouterModel: env.OPENROUTER_MODEL,
+            groqApiKey: env.GROQ_API_KEY,
+            groqModel: env.GROQ_MODEL,
+          };
+
+          const searchQuery = await extractSearchQuery(query, aiConfig);
 
           sendEvent({
             type: "stage",
@@ -524,13 +538,19 @@ export async function POST(req: NextRequest) {
           progressPercent: 80,
         });
 
+        const aiConfig = {
+          openrouterApiKey: env.OPENROUTER_API_KEY,
+          openrouterModel: env.OPENROUTER_MODEL,
+          groqApiKey: env.GROQ_API_KEY,
+          groqModel: env.GROQ_MODEL,
+        };
 
         const factDecision = await analyzeFactClaim(
           query,
           targetSearchArticles,
-          env.OPENROUTER_API_KEY,
-          env.OPENROUTER_MODEL
+          aiConfig
         );
+
 
         sendEvent({
           type: "stage",

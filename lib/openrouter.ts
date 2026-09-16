@@ -2,8 +2,16 @@ import { verificationResultSchema, VerificationResultPayload } from "@/lib/schem
 import { safeParseJsonFromLLM, domainTier } from "@/lib/utils";
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
-interface OpenRouterMessage {
+export interface AIProviderConfig {
+  openrouterApiKey?: string;
+  openrouterModel?: string;
+  groqApiKey?: string;
+  groqModel?: string;
+}
+
+interface LLMMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
@@ -19,12 +27,11 @@ function isRetryableError(error: unknown, status?: number): boolean {
   return false;
 }
 
-async function callOpenRouterWithRetry(
+async function callOpenRouter(
   apiKey: string,
   model: string,
-  messages: OpenRouterMessage[],
-  jsonFormat: boolean = false,
-  maxRetries: number = 1
+  messages: LLMMessage[],
+  jsonFormat: boolean = false
 ): Promise<string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -43,81 +50,165 @@ async function callOpenRouterWithRetry(
     bodyPayload.response_format = { type: "json_object" };
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    console.log(`[OpenRouter] Calling (model: ${model}, json: ${jsonFormat})...`);
+    const t0 = performance.now();
+    const response = await fetch(OPENROUTER_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(bodyPayload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const duration = (performance.now() - t0).toFixed(0);
+    console.log(`[OpenRouter] HTTP Status: ${response.status} (${duration}ms)`);
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`OpenRouter error (${response.status}): ${errorText}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string;
+          reasoning?: string;
+        };
+      }>;
+    };
+
+    const messageObj = data.choices?.[0]?.message;
+    let content = messageObj?.content;
+
+    if (!content || !content.trim()) {
+      if (messageObj?.reasoning && messageObj.reasoning.includes("{") && messageObj.reasoning.includes("}")) {
+        console.warn("[OpenRouter] Main content was empty, using reasoning payload...");
+        content = messageObj.reasoning;
+      } else {
+        throw new Error("OpenRouter mengembalikan respon kosong.");
+      }
+    }
+
+    return content;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+async function callGroq(
+  apiKey: string,
+  model: string,
+  messages: LLMMessage[],
+  jsonFormat: boolean = false
+): Promise<string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  const bodyPayload: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: 0.1,
+  };
+
+  if (jsonFormat) {
+    bodyPayload.response_format = { type: "json_object" };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    console.log(`[Groq] Calling (model: ${model}, json: ${jsonFormat})...`);
+    const t0 = performance.now();
+    const response = await fetch(GROQ_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(bodyPayload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const duration = (performance.now() - t0).toFixed(0);
+    console.log(`[Groq] HTTP Status: ${response.status} (${duration}ms)`);
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Groq error (${response.status}): ${errorText}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string;
+        };
+      }>;
+    };
+
+    const content = data.choices?.[0]?.message?.content;
+    if (!content || !content.trim()) {
+      throw new Error("Groq mengembalikan respon kosong.");
+    }
+
+    return content;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+async function callAIWithFallback(
+  config: AIProviderConfig,
+  messages: LLMMessage[],
+  jsonFormat: boolean = false
+): Promise<string> {
+  const providers: Array<{ name: string; run: () => Promise<string> }> = [];
+
+  // Primary: OpenRouter if configured
+  if (config.openrouterApiKey) {
+    providers.push({
+      name: `OpenRouter (${config.openrouterModel || "default"})`,
+      run: () => callOpenRouter(config.openrouterApiKey!, config.openrouterModel || "google/gemini-2.5-flash", messages, jsonFormat),
+    });
+  }
+
+  // Fallback / Alternative: Groq if configured
+  if (config.groqApiKey) {
+    providers.push({
+      name: `Groq (${config.groqModel || "llama-3.3-70b-versatile"})`,
+      run: () => callGroq(config.groqApiKey!, config.groqModel || "llama-3.3-70b-versatile", messages, jsonFormat),
+    });
+  }
+
+  if (providers.length === 0) {
+    throw new Error("Tidak ada API key AI (OPENROUTER_API_KEY atau GROQ_API_KEY) yang terkonfigurasi di environment.");
+  }
+
   let lastError: Error | null = null;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      console.warn(`[TIMEOUT] OpenRouter API call timed out after 13000ms (attempt ${attempt + 1}/${maxRetries + 1})`);
-      controller.abort();
-    }, 13000);
-
-    let currentStatus: number | undefined;
-
+  for (let i = 0; i < providers.length; i++) {
+    const provider = providers[i];
     try {
-      console.log(`[OpenRouter] Sending request (model: ${model}, attempt: ${attempt + 1}/${maxRetries + 1}, jsonFormat: ${jsonFormat})...`);
-      const t0 = performance.now();
-      const response = await fetch(OPENROUTER_ENDPOINT, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(bodyPayload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-      currentStatus = response.status;
-      const duration = (performance.now() - t0).toFixed(0);
-      console.log(`[OpenRouter] Response HTTP Status: ${response.status} ${response.statusText} (${duration}ms)`);
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        console.error(`[OpenRouter] Error Body:`, errorText);
-        throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
-      }
-
-      const data = (await response.json()) as {
-        choices?: Array<{
-          message?: {
-            content?: string;
-            reasoning?: string;
-          };
-        }>;
-      };
-
-      const messageObj = data.choices?.[0]?.message;
-      let content = messageObj?.content;
-
-      // Fallback: If content is empty or null, check if the reasoning field contains the JSON payload
-      if (!content || !content.trim()) {
-        if (messageObj?.reasoning && messageObj.reasoning.includes("{") && messageObj.reasoning.includes("}")) {
-          console.warn("[OpenRouter] Main content was empty, extracting JSON from reasoning channel...");
-          content = messageObj.reasoning;
-        } else {
-          throw new Error("OpenRouter mengembalikan respon kosong.");
-        }
-      }
-
-      return content;
+      console.log(`[AI Pipeline] Attempting provider ${i + 1}/${providers.length}: ${provider.name}...`);
+      return await provider.run();
     } catch (err) {
-      clearTimeout(timeoutId);
       lastError = err instanceof Error ? err : new Error(String(err));
-      console.warn(`[OpenRouter] Attempt ${attempt + 1} failed: ${lastError.message}`);
-
-      const shouldRetry = isRetryableError(err, currentStatus);
-
-      if (attempt < maxRetries && shouldRetry) {
-        const delay = 800;
-        console.log(`[OpenRouter] Retrying in ${delay}ms due to transient error/timeout...`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      } else if (!shouldRetry) {
-        console.warn(`[OpenRouter] Non-retryable error (status: ${currentStatus || 'N/A'}). Failing immediately.`);
-        break;
+      console.warn(`[AI Pipeline] Provider ${provider.name} failed: ${lastError.message}`);
+      if (i < providers.length - 1) {
+        console.log(`[AI Pipeline] Switching to fallback provider: ${providers[i + 1].name}...`);
       }
     }
   }
 
-  throw lastError || new Error("Gagal menghubungi OpenRouter setelah beberapa kali percobaan.");
+  throw lastError || new Error("Semua provider AI (OpenRouter & Groq) gagal merespons.");
 }
+
 
 export interface ArticleEntities {
   event: string;
@@ -134,10 +225,14 @@ export interface ArticleEntities {
 export async function extractArticleEntities(
   articleText: string,
   articleTitle: string,
-  apiKey: string,
-  model: string
+  config: AIProviderConfig | string,
+  modelFallback?: string
 ): Promise<ArticleEntities> {
-  console.log(`[OpenRouter] Model: ${model}`);
+  const providerConfig: AIProviderConfig = typeof config === "string" 
+    ? { openrouterApiKey: config, openrouterModel: modelFallback } 
+    : config;
+
+  console.log(`[AI Pipeline] Model (OpenRouter: ${providerConfig.openrouterModel || 'default'}, Groq: ${providerConfig.groqModel || 'default'})`);
   console.log(`[START] Entity Extraction for URL (title: "${articleTitle.slice(0, 50)}...")`);
   const t0 = performance.now();
 
@@ -173,15 +268,13 @@ Output WAJIB berupa JSON valid:
   const userPrompt = `JUDUL ARTIKEL: ${articleTitle}\nISI ARTIKEL:\n"""\n${articleText.slice(0, 2800)}\n"""`;
 
   try {
-    const rawJson = await callOpenRouterWithRetry(
-      apiKey,
-      model,
+    const rawJson = await callAIWithFallback(
+      providerConfig,
       [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      true,
-      1
+      true
     );
 
     const cleaned = rawJson.replace(/^```json\s*|\s*```$/g, "").trim();
@@ -232,10 +325,14 @@ Output WAJIB berupa JSON valid:
 
 export async function extractSearchQuery(
   rawText: string,
-  apiKey: string,
-  model: string
+  config: AIProviderConfig | string,
+  modelFallback?: string
 ): Promise<string> {
-  console.log(`[OpenRouter] Model: ${model}`);
+  const providerConfig: AIProviderConfig = typeof config === "string" 
+    ? { openrouterApiKey: config, openrouterModel: modelFallback } 
+    : config;
+
+  console.log(`[AI Pipeline] Query Extraction (OpenRouter: ${providerConfig.openrouterModel || 'default'}, Groq: ${providerConfig.groqModel || 'default'})`);
   console.log(`[START] Query Extraction (rawText length: ${rawText.length})`);
   const t0 = performance.now();
 
@@ -251,15 +348,13 @@ Tugas Anda:
 
   const userPrompt = `Teks klaim:\n"""\n${rawText.slice(0, 3000)}\n"""`;
 
-  const query = await callOpenRouterWithRetry(
-    apiKey,
-    model,
+  const query = await callAIWithFallback(
+    providerConfig,
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
-    false,
-    1
+    false
   );
 
   const cleanedQuery = query.replace(/^["']|["']$/g, "").trim();
@@ -272,11 +367,15 @@ Tugas Anda:
 export async function analyzeFactClaim(
   originalClaim: string,
   scrapedArticles: Array<{ title: string; url: string; domain: string; content: string }>,
-  apiKey: string,
-  model: string
+  config: AIProviderConfig | string,
+  modelFallback?: string
 ): Promise<VerificationResultPayload> {
-  console.log(`[OpenRouter] Model: ${model}`);
-  console.log(`[START] OpenRouter Analysis (articles count: ${scrapedArticles.length})`);
+  const providerConfig: AIProviderConfig = typeof config === "string" 
+    ? { openrouterApiKey: config, openrouterModel: modelFallback } 
+    : config;
+
+  console.log(`[AI Pipeline] Analysis (OpenRouter: ${providerConfig.openrouterModel || 'default'}, Groq: ${providerConfig.groqModel || 'default'})`);
+  console.log(`[START] Fact Analysis (articles count: ${scrapedArticles.length})`);
   const t0 = performance.now();
 
   const systemPrompt = `You are an elite, highly objective Indonesian fact verification system (Saring Opini).
@@ -334,15 +433,13 @@ OUTPUT FORMAT REQUIREMENTS:
 
   const userPrompt = `KLAIM PENGGUNA:\n"""\n${originalClaim}\n"""\n\nARTIKEL BERITA PEMBANDING DENGAN LABEL TIER KREDIBILITAS:\n${articlesContext}\n\nEvaluasi kecocokan kejadian spesifik (lokasi, entitas, insiden) dan bobot kredibilitas TIER sumber. Kembalikan HANYA JSON.`;
 
-  const rawJson = await callOpenRouterWithRetry(
-    apiKey,
-    model,
+  const rawJson = await callAIWithFallback(
+    providerConfig,
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
-    true,
-    1
+    true
   );
 
   try {
@@ -365,13 +462,14 @@ OUTPUT FORMAT REQUIREMENTS:
     }
 
     const duration = (performance.now() - t0).toFixed(0);
-    console.log(`[END] OpenRouter Analysis - Decision: ${validatedResult.data.status} (Score: ${validatedResult.data.confidenceScore}%, ${duration}ms)`);
+    console.log(`[END] Fact Analysis - Decision: ${validatedResult.data.status} (Score: ${validatedResult.data.confidenceScore}%, ${duration}ms)`);
 
     return validatedResult.data;
   } catch (err) {
     const duration = (performance.now() - t0).toFixed(0);
-    console.error(`[CRITICAL JSON PARSE / VALIDATION FAILURE] (${duration}ms) Model: ${model}`, err);
+    console.error(`[CRITICAL JSON PARSE / VALIDATION FAILURE] (${duration}ms)`, err);
     throw new Error(`Gagal memvalidasi output analisis AI: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+
 
