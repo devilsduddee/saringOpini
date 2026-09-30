@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { extractDomain } from "@/lib/utils";
+import { extractDomain, ECONOMIC_OFFICIAL_DOMAINS, ECONOMIC_MEDIA_DOMAINS, TopicCategory } from "@/lib/utils";
 
 const TAVILY_ENDPOINT = "https://api.tavily.com/search";
 
@@ -20,6 +20,31 @@ export interface SearchArticleItem {
   domain: string;
   snippet: string;
 }
+
+export interface SearchNewsOptions {
+  category?: TopicCategory;
+  customDomains?: string[];
+  strictCustomDomainsOnly?: boolean;
+}
+
+export const STANDARD_NEWS_DOMAINS = [
+  "detik.com",
+  "kompas.com",
+  "tempo.co",
+  "antaranews.com",
+  "cnnindonesia.com",
+  "liputan6.com",
+  "turnbackhoax.id",
+  "kominfo.go.id",
+  "republika.co.id",
+  "tribunnews.com",
+  "kumparan.com",
+  "metrotvnews.com",
+  "bloombergtechnoz.com",
+  "mediaindonesia.com",
+  "bbc.com",
+  "reuters.com",
+];
 
 async function fetchTavilyWithTimeout(
   payload: Record<string, unknown>,
@@ -49,33 +74,34 @@ async function fetchTavilyWithTimeout(
 export async function searchNewsArticles(
   query: string,
   apiKey: string,
-  maxResults: number = 3
+  maxResults: number = 3,
+  options?: SearchNewsOptions
 ): Promise<SearchArticleItem[]> {
-  console.log(`[START] Tavily Search (query: "${query.slice(0, 60)}...", maxResults: ${maxResults})`);
+  const isEconomic = options?.category === "ekonomi";
+  console.log(`[START] Tavily Search (query: "${query.slice(0, 60)}...", category: ${options?.category || 'umum'}, maxResults: ${maxResults})`);
   const t0 = performance.now();
+
+  const targetDomains = options?.strictCustomDomainsOnly && options?.customDomains && options.customDomains.length > 0
+    ? options.customDomains
+    : isEconomic
+    ? Array.from(new Set([
+        ...ECONOMIC_OFFICIAL_DOMAINS,
+        "detik.com",
+        "kompas.com",
+        "tempo.co",
+        "antaranews.com",
+        "cnnindonesia.com",
+        "turnbackhoax.id",
+        "republika.co.id",
+        ...(options?.customDomains || []),
+      ]))
+    : Array.from(new Set([...STANDARD_NEWS_DOMAINS, ...(options?.customDomains || [])]));
 
   const strictPayload = {
     api_key: apiKey,
     query,
     search_depth: "basic",
-    include_domains: [
-      "detik.com",
-      "kompas.com",
-      "tempo.co",
-      "antaranews.com",
-      "cnnindonesia.com",
-      "liputan6.com",
-      "turnbackhoax.id",
-      "kominfo.go.id",
-      "republika.co.id",
-      "tribunnews.com",
-      "kumparan.com",
-      "metrotvnews.com",
-      "bloombergtechnoz.com",
-      "mediaindonesia.com",
-      "bbc.com",
-      "reuters.com",
-    ],
+    include_domains: targetDomains,
     max_results: maxResults,
   };
 
@@ -151,9 +177,6 @@ export async function searchNewsArticles(
   }
 }
 
-/**
- * Recovers article title and snippet directly from Tavily when scraping fails or returns empty.
- */
 export async function recoverUrlMetadataViaTavily(
   url: string,
   apiKey: string
@@ -176,7 +199,6 @@ export async function recoverUrlMetadataViaTavily(
     const parsed = tavilyResponseSchema.safeParse(json);
     if (!parsed.success || parsed.data.results.length === 0) return null;
 
-    // Find the exact match or first result
     const match = parsed.data.results.find((r) => r.url.includes(url) || url.includes(r.url)) || parsed.data.results[0];
     const duration = (performance.now() - t0).toFixed(0);
     console.log(`[END] Tavily URL Metadata Recovery - Success (${duration}ms, title: "${match.title.slice(0, 50)}...")`);

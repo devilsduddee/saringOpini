@@ -170,7 +170,6 @@ async function callAIWithFallback(
 ): Promise<string> {
   const providers: Array<{ name: string; run: () => Promise<string> }> = [];
 
-  // Primary: OpenRouter if configured
   if (config.openrouterApiKey) {
     providers.push({
       name: `OpenRouter (${config.openrouterModel || "default"})`,
@@ -178,7 +177,6 @@ async function callAIWithFallback(
     });
   }
 
-  // Fallback / Alternative: Groq if configured
   if (config.groqApiKey) {
     providers.push({
       name: `Groq (${config.groqModel || "llama-3.3-70b-versatile"})`,
@@ -246,8 +244,9 @@ Tugas Anda:
    - organizations: instansi resmi, sekolah, atau lembaga (contoh: "KKB", "Dinas Kesehatan", "Polres")
    - numbers: angka/statistik signifikan (misal: "269 siswa")
    - dates: waktu/tanggal kejadian jika ada
-3. ATURAN GENERASI KUERI PENCARIAN (PRIORITAS MEDIA UTAMA):
-   - queryA (Peristiwa Inti + Lokasi + Entitas Kunci): Buat query pencarian yang menggabungkan peristiwa + LOKASI SPESIFIK + angka/entitas unik. PRIORITASKAN kueri yang memunculkan hasil dari media arus utama terpercaya (contoh: CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia). Hindari kata kunci generik.
+3. ATURAN GENERASI KUERI PENCARIAN (PRIORITAS MEDIA UTAMA & OTORITAS RESMI):
+   - queryA (Peristiwa Inti + Lokasi + Entitas Kunci): Buat query pencarian yang menggabungkan peristiwa + LOKASI SPESIFIK + angka/entitas unik. PRIORITASKAN kueri yang memunculkan hasil dari media arus utama terpercaya (contoh: CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia).
+   - Khusus topik EKONOMI, PASAR MODAL, SAHAM, & KEUANGAN: PRIORITASKAN rujukan dari bursa dan regulator resmi: Bursa Efek Indonesia (idx.co.id), Otoritas Jasa Keuangan (ojk.go.id), KSEI (ksei.co.id), Kliring Penjaminan Efek Indonesia / IDClear (idclear.co.id), serta media ekonomi kredibel (Bloomberg Technoz, Bisnis.com, Kontan, CNBC Indonesia).
    - queryB (Kombinasi Instansi/Pelaku + Peristiwa + Lokasi)
    - queryC (Laporan Resmi / Tindak Lanjut + Daerah)
    - Format: 4-8 kata kunci jurnalistik padat.
@@ -340,8 +339,12 @@ export async function extractSearchQuery(
 Tugas Anda:
 1. Baca teks/klaim berikut.
 2. Identifikasi topik spesifik, LOKASI/KOTA spesifik jika ada, dan entitas utama.
-3. Ekstrak inti klaim menjadi 1 kalimat query pencarian Google/berita yang netral, padat, dan efektif dalam Bahasa Indonesia.
+3. Ekstrak inti klaim menjadi 1 kalimat query pencarian Google/berita yang efektif dalam Bahasa Indonesia.
+   PENTING: Jangan menghapus predikat atau inti tuduhan/klausa utama yang sedang diklaim (seperti "kalah perang", "ditangkap", "meninggal", "palsu", "pemilik", "merdeka"). Mesin pencari membutuhkan kata kunci klausa tersebut untuk menemukan artikel klarifikasi atau bantahan fakta.
+   Contoh: jika klaim "Indonesia merdeka karena Amerika kalah perang", query harus memuat konteks klaim seperti "apakah amerika kalah perang kemerdekaan indonesia" atau "sejarah kemerdekaan indonesia kekalahan jepang amerika".
    PRIORITASKAN query yang akan memunculkan hasil dari media arus utama terpercaya (contoh: CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia).
+   Untuk klaim bertopik EKONOMI, KEUANGAN, SAHAM, INVESTASI, atau PERBANKAN: prioritaskan kata kunci yang mengarahkan ke kanal pengumuman resmi OJK (ojk.go.id), Bursa Efek Indonesia/BEI (idx.co.id), KSEI (ksei.co.id), IDClear/KPEI (idclear.co.id), atau publikasi finansial kredibel.
+   Jika klaim mengklaim atau mempertanyakan kepemilikan/pendiri/direksi suatu perusahaan/emiten (contoh: "[Tokoh] pemilik [Perusahaan]"): sertakan kata kunci pencarian tentang struktur pemilik/pemegang saham resmi perusahaan tersebut (contoh: "pemilik pendiri pemegang saham [Perusahaan]"), agar data fakta resmi pemegang saham terambil untuk membantah atau mengonfirmasi klaim.
    Hindari kata kunci generik yang memunculkan blog pribadi atau forum.
 4. Hapus kata-kata ajakan klik ("klik link ini", "bagikan ke 5 grup", "ketik amin").
 5. JANGAN tambahkan penjelasan apapun, HANYA kembalikan teks query pencarian saja.`;
@@ -381,38 +384,41 @@ export async function analyzeFactClaim(
   const systemPrompt = `You are an elite, highly objective Indonesian fact verification system (Saring Opini).
 
 PRIMARY OBJECTIVE:
-Determine whether the provided "KLAIM PENGGUNA" is supported by credible evidence referring strictly to the SAME EVENT.
+Evaluate the factual truth or falsity of the provided "KLAIM PENGGUNA" against credible evidence, verified facts, and historical reality.
 
-SOURCE CREDIBILITY TIERS (apply BEFORE same-event rules):
-- TIER 1 (Highest trust): CNN Indonesia, Kompas.com, Detik.com, Tempo.co, Antara News, Metro TV News, Bloomberg Technoz/Bloomberg Indonesia, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia, Reuters Indonesia, official government (.go.id) domains.
-- TIER 2 (Moderate trust): other established regional/national news outlets not listed above.
-- TIER 3 (Low trust / DO NOT USE for FAKTA or HOAX verdicts): blogs, forums, unverified aggregator sites, social media reposts, sites with no clear editorial identity.
-- If ALL available sources are Tier 3, return "TIDAK_DAPAT_DIPASTIKAN" regardless of how many sources agree.
-- If Tier 1/2 sources conflict with Tier 3 sources, DISREGARD the Tier 3 sources entirely.
-- confidenceScore should be capped lower (max ~50) when the best available source is only Tier 2, and further capped (max ~20) if any Tier 3 source is mixed in.
-
-CRITICAL SAME-EVENT CORROBORATION RULES:
-1. SAME TOPIC DOES NOT EQUAL SAME EVENT:
-   - Do NOT use or corroborate sources merely because they share general keywords (e.g. "keracunan MBG", "kebakaran", "demonstrasi").
-   - You MUST verify that the evidence matches the EXACT SAME EVENT:
-     ✅ Same Location (City/Regency/Province)
-     ✅ Same Incident & Victims/Entities
-     ✅ Same Date Range & Organization involved
-2. STRICT REJECTION OF UNRELATED INCIDENTS:
-   - REJECT and DISREGARD sources from a different city, different province, different school/institution, different victim count, or different incident timeline.
-3. MINIMUM SOURCE THRESHOLD:
-   - If fewer than 2 reliable, matching Tier 1/Tier 2 sources exist that confirm the same specific event:
-     Return status: "TIDAK_DAPAT_DIPASTIKAN" with a clear analytical explanation stating that evidence for this specific event is insufficient, rather than making assumptions.
-4. STATUS DEFINITIONS & RINGKASAN FAKTA RULES:
-   - "FAKTA": If credible Tier 1/2 official news articles explicitly confirm the truth of this specific event. (ringkasanFakta must contain 1-3 confirmed key facts).
-   - "HOAX": If official sources debunk the claim, expose it as a fabrication/scam, or prove it false. (ringkasanFakta must contain supporting debunking findings).
-   - "TIDAK_DAPAT_DIPASTIKAN": If evidence is conflicting, insufficient, or from unrelated regions.
-     IMPORTANT FOR TIDAK_DAPAT_DIPASTIKAN:
-     - DO NOT invent facts.
-     - DO NOT fabricate evidence.
-     - Return "ringkasanFakta": [] (empty array) when no reliable verified facts can be extracted.
-5. CONFIDENCE SCORE (0-100):
-   - Integer between 0 and 100 (e.g. 95, NOT 0.95).
+CRITICAL LOGICAL & SEMANTIC ENTAILMENT RULES:
+1. DECONSTRUCT AND RIGOROUSLY VERIFY EVERY PREDICATE & CAUSAL CLAIM:
+   - When a claim asserts "A terjadi karena B" (e.g. "Indonesia merdeka karena Amerika kalah perang"):
+     You MUST verify BOTH parts:
+     (1) Did event A actually happen?
+     (2) Is premise B factually TRUE and the actual cause?
+   - If premise B is FALSE or INVERTED (e.g. America did NOT lose World War II; America and the Allies WON the war, while Japan surrendered and lost), the claim is a FALSEHOOD / INVERSION. You MUST classify it as "HOAX".
+2. INVERSION DETECTION (WINNER VS LOSER, SUBJECT VS OBJECT, CAUSE VS EFFECT):
+   - Pay meticulous attention to roles: Who won? Who lost? Who attacked? Who defended? Who is alive? Who died?
+   - If a claim asserts "X kalah perang", but the facts prove "X menang perang dan Y yang kalah", the claim contradicts reality. Mark as "HOAX".
+   - If a claim asserts "X ditangkap", but the evidence shows "X yang menangkap" or "tidak pernah ditangkap", mark as "HOAX".
+   - AVOID THE PARTIAL TRUTH FALLACY: A claim is NEVER "FAKTA" merely because one part of the sentence is true (e.g. "Indonesia merdeka") if the core premise or causal predicate is false or inverted ("karena Amerika kalah perang").
+3. SAME-EVENT CORROBORATION RULES:
+   - SAME TOPIC DOES NOT EQUAL SAME EVENT:
+     Do NOT use or corroborate sources merely because they share general keywords (e.g. "keracunan MBG", "kebakaran", "demonstrasi").
+     You MUST verify that the evidence matches the EXACT SAME EVENT:
+     Same Location (City/Regency/Province), Same Incident & Entities, Same Timeline.
+   - Disregard sources from unrelated cities or unrelated institutions.
+4. SOURCE CREDIBILITY TIERS:
+   - TIER 1 (Highest trust): CNN Indonesia, Kompas.com, Detik.com, Tempo.co, Antara News, Metro TV News, Bloomberg Technoz/Bloomberg Indonesia, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia, Reuters Indonesia, official government (.go.id) domains.
+   - OFFICIAL ECONOMIC & CAPITAL MARKET AUTHORITIES (TIER 1): For claims regarding economy, investments, stocks, capital markets, clearing, or banking, official regulatory and SRO releases from Bursa Efek Indonesia / IDX (idx.co.id), KSEI (ksei.co.id), IDClear / KPEI (idclear.co.id), and OJK (ojk.go.id) represent the definitive primary Tier 1 authorities.
+   - TIER 2 (Moderate trust): other established regional/national news outlets not listed above.
+   - TIER 3 (Low trust / DO NOT USE for FAKTA or HOAX verdicts): blogs, forums, unverified aggregator sites, social media reposts, sites with no clear editorial identity.
+   - If ALL available sources are Tier 3, return "TIDAK_DAPAT_DIPASTIKAN".
+   - If Tier 1/2 sources conflict with Tier 3 sources, DISREGARD the Tier 3 sources entirely.
+   - confidenceScore should be capped lower (max ~50) when the best available source is only Tier 2, and further capped (max ~20) if any Tier 3 source is mixed in.
+5. STATUS DEFINITIONS:
+   - "FAKTA": The claim in its entirety is completely accurate, supported by verified facts, and contains no false premises or inversions. (ringkasanFakta must contain 1-3 confirmed key facts).
+   - "HOAX": The claim contains factually false statements, inverted facts (e.g. claiming the victor lost, or asserting fake causes), fabricated events, or has been debunked. (ringkasanFakta must contain 1-3 counter-facts or debunking evidence points).
+   - "TIDAK_DAPAT_DIPASTIKAN": Evidence is conflicting or insufficient to draw a definitive conclusion. Return "ringkasanFakta": [].
+6. ALASAN & RINGKASAN FAKTA:
+   - In "alasan", clearly explain the logical and factual reasoning. Explicitly state why a premise is false or inverted if applicable (e.g. "Amerika Serikat memenangkan Perang Dunia II, sedangkan Jepang yang kalah").
+   - In "ringkasanFakta", list 1-3 concise factual bullet points.
 
 OUTPUT FORMAT REQUIREMENTS:
 - Return ONLY a valid, parseable JSON object matching this exact schema:
@@ -427,11 +433,12 @@ OUTPUT FORMAT REQUIREMENTS:
   const articlesContext = scrapedArticles
     .map((art, i) => {
       const tier = domainTier(art.url);
-      return `--- SUMBER ${i + 1} [TIER ${tier}]: ${art.title} (${art.domain}) ---\nURL: ${art.url}\nIsi:\n${art.content.slice(0, 2500)}\n`;
+      const contentText = art.content || "";
+      return `--- SUMBER ${i + 1} [TIER ${tier}]: ${art.title} (${art.domain}) ---\nURL: ${art.url}\nIsi:\n${contentText.slice(0, 2500)}\n`;
     })
     .join("\n\n");
 
-  const userPrompt = `KLAIM PENGGUNA:\n"""\n${originalClaim}\n"""\n\nARTIKEL BERITA PEMBANDING DENGAN LABEL TIER KREDIBILITAS:\n${articlesContext}\n\nEvaluasi kecocokan kejadian spesifik (lokasi, entitas, insiden) dan bobot kredibilitas TIER sumber. Kembalikan HANYA JSON.`;
+  const userPrompt = `KLAIM PENGGUNA:\n"""\n${originalClaim}\n"""\n\nARTIKEL BERITA PEMBANDING DENGAN LABEL TIER KREDIBILITAS:\n${articlesContext}\n\nEvaluasi kebenaran klaim secara logis, teliti subjek/predikat/sebab-akibat dan bobot kredibilitas TIER sumber. Kembalikan HANYA JSON.`;
 
   const rawJson = await callAIWithFallback(
     providerConfig,

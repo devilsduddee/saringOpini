@@ -30,7 +30,6 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
       setDisplayedScore(val);
     });
 
-    // Programmatically move focus to result card without forced scroll jump
     if (containerRef.current) {
       containerRef.current.focus({ preventScroll: true });
     }
@@ -50,13 +49,13 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
         };
       case "HOAX":
         return {
-          label: "HOAX / MISINFORMASI",
+          label: "TERINDIKASI HOAKS",
           bgColor: "bg-[#EF4444]/15",
           textColor: "text-[#EF4444]",
           borderColor: "border-[#EF4444]",
           icon: XCircle,
           barColor: "bg-[#EF4444]",
-          description: "Klaim terbukti tidak benar, dimanipulasi, atau merupakan penipuan berantai.",
+          description: "Klaim terindikasi tidak benar, dimanipulasi, atau merupakan penipuan berantai.",
         };
       case "TIDAK_DAPAT_DIPASTIKAN":
       default:
@@ -76,13 +75,12 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
   const StatusIcon = statusConfig.icon;
 
   const handleCopySummary = async () => {
-    const textToCopy = `[HASIL SARING OPINI]\nStatus: ${result.status}\nKeyakinan: ${result.confidenceScore}%\n\nKlaim: ${result.query}\n\nAlasan: ${result.alasan}\n\nCek mandiri di: https://saringopini.id`;
+    const textToCopy = `[HASIL SARING OPINI]\nStatus: ${statusConfig.label}\nKeyakinan: ${result.confidenceScore}%\n\nKlaim: ${result.query}\n\nAlasan: ${result.alasan}\n\nCek mandiri di: https://saringopini.id`;
     try {
       await navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ignore
     }
   };
 
@@ -94,7 +92,6 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
       aria-label={`Hasil Verifikasi: ${result.status}`}
       className="w-full max-w-[960px] mx-auto my-8 rounded-3xl border-3 border-[#FFD12F] bg-[#1C1C1C] p-5 sm:p-8 md:p-10 shadow-2xl space-y-7 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD12F]/70 transition-all"
     >
-      {/* 1. Status Section (Highest Visual Priority) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 pb-6 border-b border-[#27272A]">
         <div className="space-y-2">
           <span className="text-xs font-bold uppercase text-[#71717A] tracking-wider block">
@@ -131,7 +128,6 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
         </div>
       </div>
 
-      {/* 2. Confidence Score Gauge */}
       <div className="space-y-2.5 bg-[#141414] p-4 sm:p-5 rounded-2xl border border-[#27272A]">
         <div className="flex justify-between text-xs sm:text-sm font-bold uppercase tracking-wider">
           <span className="text-[#A1A1AA]">Tingkat Keyakinan Sistem</span>
@@ -152,7 +148,6 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
         </div>
       </div>
 
-      {/* 3. Original Claim Analyzed */}
       <div className="space-y-2">
         <h4 className="text-xs font-bold uppercase tracking-wider text-[#71717A] flex items-center gap-1.5">
           <FileText className="h-3.5 w-3.5" />
@@ -163,9 +158,7 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
         </div>
       </div>
 
-      {/* 4. Analytical Reasoning & Fact Points */}
       <div className="space-y-4">
-        {/* AI Synthesis Narrative */}
         <div className="space-y-2">
           <h4 className="text-xs font-bold uppercase tracking-wider text-[#FFD12F] flex items-center gap-1.5">
             <ShieldCheck className="h-3.5 w-3.5" />
@@ -176,7 +169,6 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
           </div>
         </div>
 
-        {/* Factual Evidence & Counter-Points */}
         {result.ringkasanFakta && result.ringkasanFakta.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
@@ -207,7 +199,6 @@ export function ResultCard({ result, onReset }: ResultCardProps) {
         )}
       </div>
 
-      {/* 5. Reference Sources */}
       <div className="space-y-3 pt-2">
         <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-[#71717A]">
           Sumber Referensi & Pembanding Resmi ({result.sources.length}):

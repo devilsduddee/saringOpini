@@ -337,3 +337,80 @@ Status:
 
 4. **Multi-Source Fallback Strategy**:
    Jika artikel primer gagal diekstrak via Jina Reader dalam 7.5 detik, sistem tidak membatalkan proses melainkan langsung menggunakan teks *snippet* pencarian Tavily untuk menjaga kelancaran pengalaman pengguna.
+
+5. **Klasifikasi Topik Ekonomi & Prioritas Otoritas Pasar Modal**:
+   Untuk klaim bertema ekonomi, pasar modal, saham, dan keuangan, sistem mendeteksi topik secara otomatis tanpa mengubah UI/UX, lalu mengalihkan prioritas pencarian dan verifikasi ke sumber otoritas resmi SRO (Bursa Efek Indonesia / IDX `idx.co.id`, KSEI `ksei.co.id`, IDClear / KPEI `idclear.co.id`, dan Otoritas Jasa Keuangan `ojk.go.id`) sebagai sumber Tier 1 primer berbobot tertinggi.
+
+---
+
+## Log Riwayat Implementasi
+
+### Completed
+
+- [x] Klasifikasi Topik Ekonomi & Integrasi Sumber Otoritas Resmi Pasar Modal (BEI, KSEI, IDClear, OJK)
+  - Date: 2026-09-29
+  - Files:
+    - [lib/utils.ts](file:///d:/Codinge_Here/saringopini/lib/utils.ts)
+    - [lib/tavily.ts](file:///d:/Codinge_Here/saringopini/lib/tavily.ts)
+    - [lib/openrouter.ts](file:///d:/Codinge_Here/saringopini/lib/openrouter.ts)
+    - [app/api/verify/stream/route.ts](file:///d:/Codinge_Here/saringopini/app/api/verify/stream/route.ts)
+    - [lib/__tests__/economic_classification.test.ts](file:///d:/Codinge_Here/saringopini/lib/__tests__/economic_classification.test.ts)
+  - Notes:
+    - Membuat klasifikasi otomatis topik ekonomi (`isEconomicTopic`, `classifyTopic`) berbasis kata kunci pasar modal, instrumen keuangan, regulator, dan pola URL.
+    - Menambahkan kamus emiten bursa saham (`KNOWN_EMITEN_MAP`) dan fungsi ekstraksi emiten (`extractEmitenMention`) untuk mendeteksi ticker publik (seperti GOTO, BBCA, BBRI, BMRI, TLKM, BUKA, dll.) serta istilah kepemilikan/tata kelola perusahaan (pemilik, pendiri, pemegang saham, direktur).
+    - Menetapkan 4 otoritas ekonomi utama (`idx.co.id`, `ksei.co.id`, `idclear.co.id`, `ojk.go.id`) sebagai sumber Tier 1 dengan kredibilitas tertinggi di `domainTier` dan `isEconomicOfficialDomain`.
+    - Mengimplementasikan pencarian multi-sudut (*multi-angle retrieval*) saat klaim menyangkut emiten/perusahaan: mengambil profil keterbukaan informasi langsung dari `site:idx.co.id`, data kepemilikan saham resmi, serta kueri klaim spesifik.
+    - Menambahkan bonus relevansi (+25 poin) untuk sumber otoritas ekonomi di `calculateSourceRelevance`.
+    - Mengurutkan sumber resmi ekonomi ke posisi teratas (`targetSearchArticles`) sebelum dianalisis oleh AI.
+    - Memperbarui instruksi prompt ekstraksi kueri agar mencari bukti pemegang saham resmi ketika klaim mempertanyakan kepemilikan perusahaan.
+    - Tidak ada perubahan pada UI/UX komponen frontend sesuai spesifikasi pengguna.
+  - Verification:
+    - `npx tsx lib/__tests__/economic_classification.test.ts` ✅ (Semua skenario pengujian lulus, termasuk kasus 'ridho pemilik goto?')
+    - `npx tsx lib/__tests__/schemas.test.ts` ✅ (Skema validasi lulus)
+- [x] Resolusi Dominasi Domain Tunggal (Bloomberg Technoz), Deteksi Ticker Bursa 4 Huruf (AADI/Adaro), Penegakan Keberagaman Domain (Domain Diversity), dan Penyaringan Relevansi Pencarian Teks
+  - Date: 2026-09-29
+  - Files:
+    - [lib/utils.ts](file:///d:/Codinge_Here/saringopini/lib/utils.ts)
+    - [lib/tavily.ts](file:///d:/Codinge_Here/saringopini/lib/tavily.ts)
+    - [app/api/verify/stream/route.ts](file:///d:/Codinge_Here/saringopini/app/api/verify/stream/route.ts)
+    - [lib/__tests__/economic_classification.test.ts](file:///d:/Codinge_Here/saringopini/lib/__tests__/economic_classification.test.ts)
+  - Notes:
+    - Mendiagnosis penyebab kueri "apakah ridho pemilik AADI" menampilkan rujukan dominan dari `bloombergtechnoz.com` (Prajogo Pangestu CUAN, BUMI, BCA, LPKR): kueri sebelumnya terklasifikasi sebagai "umum" karena AADI belum terdaftar, LLM mengubah kueri menjadi istilah umum tanpa relevansi subjek, Tavily mengelompokkan artikel finansial tanpa diversifikasi domain, dan pipeline mode teks belum menerapkan filter relevansi isi artikel.
+    - Menambahkan kode saham `AADI` (PT Adaro Andalan Indonesia Tbk), `ADMR`, `CUAN`, `PTRO`, `DEWA`, `PGAS`, `INCO`, `PTBA`, `KIJA`, `BSDE`, `LPKR` ke `KNOWN_EMITEN_MAP`.
+    - Mengimplementasikan deteksi dinamis ticker bursa 4 huruf kapital (`extractEmitenMention`) dengan filter akronim non-saham (seperti BMKG, BNPB, BPOM, PSSI, dll.) dan validasi konteks pasar modal/kepemilikan.
+    - Menerapkan penegakan keberagaman domain (*Domain Diversity*): membatasi maksimal 1 artikel per portal media komersial (tidak akan pernah terjadi lagi 3 atau 4 artikel berasal dari Bloomberg Technoz saja), dan maksimal 2 artikel khusus untuk otoritas resmi bursa (`idx.co.id`, `ojk.go.id`, `ksei.co.id`).
+    - Menambahkan opsi `strictCustomDomainsOnly` di `lib/tavily.ts` agar pencarian profil keterbukaan informasi di `idx.co.id` benar-benar terisolasi ke situs resmi BEI tanpa tercampur portal berita umum.
+    - Menerapkan penyaringan relevansi (*relevance filtering*) pada mode teks: artikel pembanding yang tidak menyebutkan kode ticker, nama emiten, atau subjek klaim akan otomatis ditolak dan tidak dikirimkan ke AI.
+    - Menghapus seluruh baris komentar (`//` dan `/* */`) pada file yang diubah sesuai instruksi ketat pengguna.
+  - Verification:
+    - `npx tsx lib/__tests__/economic_classification.test.ts` ✅ (Seluruh 16 skenario pengujian lulus, termasuk AADI dan BREN)
+- [x] Pembaruan Label Status Hoax Menjadi "TERINDIKASI HOAKS"
+  - Date: 2026-09-30
+  - Files:
+    - [components/verification/ResultCard.tsx](file:///d:/Codinge_Here/saringopini/components/verification/ResultCard.tsx)
+  - Notes:
+    - Memperbarui label lencana kesimpulan analisis sistem untuk status `HOAX` dari `"HOAX / MISINFORMASI"` menjadi `"TERINDIKASI HOAKS"`.
+    - Menyelaraskan teks deskripsi status menjadi `"Klaim terindikasi tidak benar, dimanipulasi, atau merupakan penipuan berantai."`.
+    - Menyelaraskan teks clipboard pada tombol "Salin Hasil" agar menggunakan label `"TERINDIKASI HOAKS"`.
+    - Menghapus seluruh baris komentar (`//`, `/* */`, dan `{/* */}`) dari komponen `ResultCard.tsx`.
+- [x] Perbaikan Evaluasi Logika Kausalitas AI & Ekstraksi Predikat Klaim (Resolusi False Positive FAKTA)
+  - Date: 2026-09-30
+  - Files:
+    - [lib/openrouter.ts](file:///d:/Codinge_Here/saringopini/lib/openrouter.ts)
+  - Notes:
+    - Mendiagnosis bug logika verifikasi pada klaim "INDONESIA MERDEKA KARENA AMERIKA KALAH PERANG" yang sebelumnya keliru menghasilkan putusan "FAKTA / TERVERIFIKASI" (95%): AI mengalami bias konfirmasi dan kesesatan kebenaran parsial (*partial truth fallacy*) karena artikel memuat kata kemerdekaan Indonesia dan Amerika Serikat, tanpa memverifikasi kebenaran klausa sebab-akibat ("karena Amerika kalah perang" padahal Amerika/Sekutu menang dan Jepang yang kalah perang).
+    - Memperbarui `extractSearchQuery` agar wajib mempertahankan inti predikat/tuduhan utama klaim (misalnya "kalah perang", "ditangkap", "palsu", "pemilik") sehingga kueri pencarian Tavily menghasilkan artikel klarifikasi atau bantahan spesifik, bukan artikel sejarah umum yang netral.
+    - Memperbarui `systemPrompt` pada `analyzeFactClaim` dengan aturan verifikasi logika dan semantik ketat:
+      1. Dekonstruksi klausa kausal "A terjadi karena B" (keduanya harus benar dan saling berhubungan sebab-akibat nyata).
+      2. Deteksi pembalikan fakta (*inversion detection*: pemenang vs yang kalah, subjek vs objek, pelaku vs korban).
+      3. Penegasan bahwa klaim dengan premis salah atau terbalik WAJIB divonis "HOAX", tidak boleh diberi vonis "FAKTA" hanya karena bagian lain kalimatnya benar.
+    - Menambahkan penjaga *null-safety* pada pembacaan cuplikan konten artikel (`(art.content || "").slice(...)`).
+    - Menghapus seluruh baris komentar (`//` dan `/* */`) dari berkas `lib/openrouter.ts`.
+  - Verification:
+    - Pengujian *end-to-end* klaim "INDONESIA MERDEKA KARENA AMERIKA KALAH PERANG": Berhasil divonis **HOAX** (90% - 99%) dengan analisis historis akurat bahwa Sekutu/Amerika memenangkan perang dan Jepang yang menyerah kalah ✅.
+    - `npx tsx lib/__tests__/economic_classification.test.ts` ✅ (16/16 tes lulus)
+    - `npx tsx lib/__tests__/schemas.test.ts` ✅ (5/5 tes lulus)
+    - `npx tsc --noEmit` ✅ (TypeScript 0 errors)
+    - `npm run build` ✅ (Turbopack production build berhasil 0 error)
+
+
