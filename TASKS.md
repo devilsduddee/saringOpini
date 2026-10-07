@@ -407,10 +407,26 @@ Status:
     - Menambahkan penjaga *null-safety* pada pembacaan cuplikan konten artikel (`(art.content || "").slice(...)`).
     - Menghapus seluruh baris komentar (`//` dan `/* */`) dari berkas `lib/openrouter.ts`.
   - Verification:
-    - Pengujian *end-to-end* klaim "INDONESIA MERDEKA KARENA AMERIKA KALAH PERANG": Berhasil divonis **HOAX** (90% - 99%) dengan analisis historis akurat bahwa Sekutu/Amerika memenangkan perang dan Jepang yang menyerah kalah ✅.
+- [x] Resolusi Disparitas Klaim Angka Perkiraan (40.000 vs 40.759 Kasus MBG), Penegakan Filter Relevansi Topik Teks, dan Pencegahan False Comparison Berita
+  - Date: 2026-10-07
+  - Files:
+    - [lib/openrouter.ts](file:///d:/KULIAH/Kompres/lib/openrouter.ts)
+    - [app/api/verify/stream/route.ts](file:///d:/KULIAH/Kompres/app/api/verify/stream/route.ts)
+    - [lib/__tests__/claim_extraction_and_relevance.test.ts](file:///d:/KULIAH/Kompres/lib/__tests__/claim_extraction_and_relevance.test.ts)
+  - Notes:
+    - Mendiagnosis penyebab perbedaan vonis 180 derajat antara klaim "40000 keracunan mbg" (divonis TERINDIKASI HOAKS) dan "40.759 korban keracunan mbg" (divonis FAKTA 90%): pencocokan kata kunci literal pada Tavily tidak menemukan artikel dengan angka polos "40000" sehingga mesin pencari mengambil berita insiden lain (keracunan sate jebred 52 korban), mode teks sebelumnya tidak menjalankan filter relevansi isi artikel sehingga artikel sate jebred langsung dikirim ke AI, dan AI membandingkan klaim 40.000 dengan angka 52 sate jebred sehingga menuduh klaim dilebih-lebihkan/hoaks.
+    - Menambahkan fungsi `extractClaimEntities` pada [lib/openrouter.ts](file:///d:/KULIAH/Kompres/lib/openrouter.ts) untuk mengekstraksi peristiwa, angka, entitas, dan merancang 3 variasi kueri pencarian jurnalistik multi-sudut: `queryA` (spesifik dengan normalisasi angka & perluasan akronim MBG), `queryB` (peristiwa pokok tanpa angka kaku agar variasi estimasi tetap menemukan laporan investigasi pers), dan `queryC` (cek fakta dan laporan pemantau).
+    - Memperbarui prompt `extractSearchQuery` agar menormalisasi format angka ribuan (e.g. `40000` -> `40.000` / `40 ribu`) dan mengembangkan akronim kebijakan publik.
+    - Menerapkan aturan toleransi aproksimasi numerik (*Statistical & Numerical Approximation Tolerance*) pada `analyzeFactClaim`: angka pembulatan wajar dalam wacana publik (seperti 40.000 untuk data resmi 40.759) divalidasi sebagai **FAKTA** dengan klarifikasi angka rilis resmi di ringkasan, bukan divonis hoaks.
+    - Menambahkan aturan integritas topik (*Strict Topic Integrity & Disregard Unrelated Events*): AI dilarang keras membandingkan klaim dengan peristiwa berbeda (seperti sate jebred vs MBG), dan jika tidak ada sumber relevan maka wajib mengeluarkan status `TIDAK_DAPAT_DIPASTIKAN`.
+    - Menegaskan prinsip netralitas jurnalistik mutlak pada isu dan kritik kebijakan pemerintah (*Absolute Objectivity on Public Policy*).
+    - Mengintegrasikan penapisan relevansi (*source relevance scoring*) pada rute SSE [app/api/verify/stream/route.ts](file:///d:/KULIAH/Kompres/app/api/verify/stream/route.ts) untuk klaim teks, sehingga artikel yang tidak relevan (seperti sate jebred yang hanya mencetak skor 25/100) otomatis dibuang.
+    - Memperketat rasio pencocokan kata kunci pada `calculateSourceRelevance` agar tidak meloloskan artikel insiden lain yang hanya kebetulan memuat 1 kata umum (seperti "keracunan") di judul.
+  - Verification:
+    - `npx tsx lib/__tests__/claim_extraction_and_relevance.test.ts` ✅ (Sate jebred tereliminasi dengan skor 25/100 & berita MBG lolos dengan skor 100/100)
     - `npx tsx lib/__tests__/economic_classification.test.ts` ✅ (16/16 tes lulus)
     - `npx tsx lib/__tests__/schemas.test.ts` ✅ (5/5 tes lulus)
-    - `npx tsc --noEmit` ✅ (TypeScript 0 errors)
     - `npm run build` ✅ (Turbopack production build berhasil 0 error)
+
 
 

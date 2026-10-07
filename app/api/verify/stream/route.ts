@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { verificationInputSchema } from "@/lib/schemas";
 import { getEnvConfig } from "@/lib/env";
-import { extractSearchQuery, extractArticleEntities, analyzeFactClaim } from "@/lib/openrouter";
+import { extractSearchQuery, extractClaimEntities, extractArticleEntities, analyzeFactClaim } from "@/lib/openrouter";
 import { searchNewsArticles, recoverUrlMetadataViaTavily } from "@/lib/tavily";
 import { scrapeCleanArticle } from "@/lib/jina";
 import { isUrl, extractDomain, extractSlugTitle, domainTier, isEconomicTopic, isEconomicOfficialDomain, extractEmitenMention, TopicCategory } from "@/lib/utils";
@@ -110,10 +110,10 @@ export function calculateSourceRelevance(
 
       const matchRatio = matchedEventKeywords / eventKeywords.length;
 
-      if (matchRatio >= 0.6 || titleMatchedKeywords >= 2) {
+      if (matchRatio >= 0.6 || (eventKeywords.length <= 2 && titleMatchedKeywords >= 1) || (titleMatchedKeywords >= 2 && matchRatio >= 0.4)) {
         score += 35;
         breakdown.push(`+35 Match Core Incident Action/Event (${matchedEventKeywords}/${eventKeywords.length} keywords: [${eventKeywords.filter(k => textToScan.includes(k)).join(", ")}])`);
-      } else if (matchRatio >= 0.3 || titleMatchedKeywords >= 1) {
+      } else if (matchRatio >= 0.4 || (eventKeywords.length >= 4 && matchedEventKeywords >= 2 && titleMatchedKeywords >= 1)) {
         score += 15;
         breakdown.push(`+15 Partial Incident Match (${matchedEventKeywords}/${eventKeywords.length} keywords)`);
       } else {
@@ -454,7 +454,7 @@ export async function POST(req: NextRequest) {
             groqModel: env.GROQ_MODEL,
           };
 
-          const searchQuery = await extractSearchQuery(query, aiConfig);
+          const entities = await extractClaimEntities(query, aiConfig);
 
           const topicCategory: TopicCategory = isEconomicTopic(query) ? "ekonomi" : "umum";
           const emiten = extractEmitenMention(query);
@@ -470,17 +470,17 @@ export async function POST(req: NextRequest) {
               ? (emiten 
                   ? `Mencari data resmi emiten ${emiten.ticker} langsung dari BEI/IDX & fakta pemegang saham...`
                   : "Mencari rujukan resmi otoritas ekonomi (OJK, BEI/IDX, KSEI, IDClear) & media finansial kredibel...")
-              : "Mencari rujukan berita pembanding di media kredibel...",
+              : "Mencari rujukan berita pembanding multi-sudut di media kredibel...",
             progressPercent: 40,
           });
 
-          let searchResults: Array<{ title: string; url: string; domain: string; snippet: string }> = [];
+          let candidateArticles: Array<{ title: string; url: string; domain: string; snippet: string }> = [];
 
           if (topicCategory === "ekonomi" && emiten) {
             const searchPromises = [
               searchNewsArticles(`site:idx.co.id ${emiten.ticker}`, env.TAVILY_API_KEY, 3, { customDomains: ["idx.co.id"], strictCustomDomainsOnly: true }).catch(() => []),
               searchNewsArticles(`pemilik pemegang saham pengendali ${emiten.ticker} ${emiten.fullName}`, env.TAVILY_API_KEY, 3, { category: "ekonomi" }).catch(() => []),
-              searchNewsArticles(searchQuery || query.slice(0, 100), env.TAVILY_API_KEY, 3, { category: "ekonomi" }).catch(() => []),
+              searchNewsArticles(entities.queryA || query.slice(0, 100), env.TAVILY_API_KEY, 3, { category: "ekonomi" }).catch(() => []),
             ];
 
             const [idxHits, ownerHits, claimHits] = await Promise.all(searchPromises);
@@ -505,20 +505,22 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            searchResults = diverseCandidates.slice(0, 5);
-            console.log(`[Emiten Search] Merged ${searchResults.length} diverse targeted articles for ${emiten.ticker} (IDX hits: ${idxHits.length})`);
+            candidateArticles = diverseCandidates.slice(0, 5);
+            console.log(`[Emiten Search] Merged ${candidateArticles.length} diverse targeted articles for ${emiten.ticker} (IDX hits: ${idxHits.length})`);
           } else {
-            const raw = await searchNewsArticles(
-              searchQuery || query.slice(0, 100), 
-              env.TAVILY_API_KEY, 
-              6,
-              { category: topicCategory }
-            );
+            const searchPromises = [
+              searchNewsArticles(entities.queryA, env.TAVILY_API_KEY, 3, { category: topicCategory }).catch(() => []),
+              searchNewsArticles(entities.queryB, env.TAVILY_API_KEY, 3, { category: topicCategory }).catch(() => []),
+              searchNewsArticles(entities.queryC, env.TAVILY_API_KEY, 3, { category: topicCategory }).catch(() => []),
+            ];
+
+            const [resultsA, resultsB, resultsC] = await Promise.all(searchPromises);
+
             const domainCounts = new Map<string, number>();
             const diverseCandidates: Array<{ title: string; url: string; domain: string; snippet: string }> = [];
             const seenUrls = new Set<string>();
 
-            for (const item of raw) {
+            for (const item of [...resultsA, ...resultsB, ...resultsC]) {
               const cleanUrl = item.url.split("?")[0].toLowerCase().trim();
               if (seenUrls.has(cleanUrl)) continue;
               seenUrls.add(cleanUrl);
@@ -532,10 +534,10 @@ export async function POST(req: NextRequest) {
                 diverseCandidates.push(item);
               }
             }
-            searchResults = diverseCandidates.slice(0, 4);
+            candidateArticles = diverseCandidates.slice(0, 5);
           }
 
-          if (searchResults.length === 0) {
+          if (candidateArticles.length === 0) {
             sendEvent({
               type: "stage",
               stage: "synthesizing",
@@ -576,7 +578,7 @@ export async function POST(req: NextRequest) {
             progressPercent: 60,
           });
 
-          const scrapePromises = searchResults.map(async (res) => {
+          const scrapePromises = candidateArticles.map(async (res) => {
             const scraped = await scrapeCleanArticle(res.url, env.JINA_API_KEY);
             return {
               title: res.title,
@@ -586,14 +588,14 @@ export async function POST(req: NextRequest) {
             };
           });
 
-          targetSearchArticles = await Promise.all(scrapePromises);
+          const resolvedCandidates = await Promise.all(scrapePromises);
 
           if (topicCategory === "ekonomi" && emiten) {
             const tickerLower = emiten.ticker.toLowerCase();
             const emitenNameTokens = emiten.fullName.toLowerCase().split(/[\s,.-]+/).filter((t) => t.length >= 4 && !["persero", "indonesia"].includes(t));
             const querySubjectTokens = query.toLowerCase().split(/[\s,.-]+/).filter((t) => t.length >= 4 && !["apakah", "pemilik", "saham", "emiten", "adalah"].includes(t));
 
-            const relevantArticles = targetSearchArticles.filter((art) => {
+            const relevantArticles = resolvedCandidates.filter((art) => {
               if (isEconomicOfficialDomain(art.url)) return true;
               const text = `${art.title} ${art.content.slice(0, 2000)}`.toLowerCase();
               const hasTicker = new RegExp(`\\b${tickerLower}\\b`, "i").test(text);
@@ -602,9 +604,69 @@ export async function POST(req: NextRequest) {
               return hasTicker || hasEmitenName || hasSubject;
             });
 
-            if (relevantArticles.length > 0) {
-              targetSearchArticles = relevantArticles;
-            }
+            targetSearchArticles = relevantArticles.length > 0 ? relevantArticles : resolvedCandidates;
+          } else {
+            const scoredCandidates: ScoredArticle[] = resolvedCandidates.map((art) => {
+              const { score, breakdown } = calculateSourceRelevance(art, entities, topicCategory);
+              return { ...art, relevanceScore: score, scoreBreakdown: breakdown };
+            });
+
+            const primaryAccepted = scoredCandidates.filter((item) => item.relevanceScore >= 60);
+            const secondaryAccepted = scoredCandidates.filter((item) => item.relevanceScore >= 50);
+            const acceptedSources = (primaryAccepted.length > 0 ? primaryAccepted : secondaryAccepted)
+              .sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+            console.log("\n================ [TEXT CLAIM RETRIEVAL DIAGNOSTICS] ================");
+            console.log(`[Text Claim]: "${query}"`);
+            console.log(`[Extracted Event]: "${entities.event}" | Numbers: [${entities.numbers.join(", ")}]`);
+            console.log(`[Queries]: A: "${entities.queryA}" | B: "${entities.queryB}" | C: "${entities.queryC}"`);
+            scoredCandidates.forEach((cand, idx) => {
+              console.log(`  ${cand.relevanceScore >= 50 ? "✅" : "❌"} (#${idx + 1}) Score: ${cand.relevanceScore}/100 | ${cand.title}`);
+              console.log(`     URL: ${cand.url}`);
+              console.log(`     Reasons: ${cand.scoreBreakdown.join(" | ")}`);
+            });
+            console.log("====================================================================\n");
+
+            targetSearchArticles = acceptedSources.slice(0, 4).map((s) => ({
+              title: s.title,
+              url: s.url,
+              domain: s.domain,
+              content: s.content,
+            }));
+          }
+
+          if (targetSearchArticles.length === 0) {
+            sendEvent({
+              type: "stage",
+              stage: "synthesizing",
+              stageMessage: "Menyusun kesimpulan verifikasi...",
+              progressPercent: 95,
+            });
+
+            const unconfirmedResult: VerificationResult = {
+              id: `verif-${Date.now()}`,
+              query,
+              inputType: "text",
+              status: "TIDAK_DAPAT_DIPASTIKAN",
+              confidenceScore: 30,
+              alasan: "Tidak ditemukan artikel berita atau rujukan resmi yang relevan dengan topik klaim ini di portal berita terdaftar. Klaim tidak dapat dipastikan kebenarannya karena ketiadaan data pembanding terpercaya.",
+              ringkasanFakta: [
+                "Tidak ada rilis pers atau liputan media arus utama yang terverifikasi untuk peristiwa atau angka yang diklaim.",
+                "Hindari menyebarkan informasi tanpa rujukan resmi atau konfirmasi instansi terkait.",
+              ],
+              sources: [],
+              timestamp: new Date().toISOString(),
+            };
+
+            sendEvent({
+              type: "complete",
+              stage: "completed",
+              stageMessage: "Verifikasi Selesai",
+              progressPercent: 100,
+              data: unconfirmedResult,
+            });
+            controller.close();
+            return;
           }
 
           const tier1Or2Count = targetSearchArticles.filter((art) => domainTier(art.url) <= 2).length;

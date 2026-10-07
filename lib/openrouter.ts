@@ -339,13 +339,14 @@ export async function extractSearchQuery(
 Tugas Anda:
 1. Baca teks/klaim berikut.
 2. Identifikasi topik spesifik, LOKASI/KOTA spesifik jika ada, dan entitas utama.
-3. Ekstrak inti klaim menjadi 1 kalimat query pencarian Google/berita yang efektif dalam Bahasa Indonesia.
-   PENTING: Jangan menghapus predikat atau inti tuduhan/klausa utama yang sedang diklaim (seperti "kalah perang", "ditangkap", "meninggal", "palsu", "pemilik", "merdeka"). Mesin pencari membutuhkan kata kunci klausa tersebut untuk menemukan artikel klarifikasi atau bantahan fakta.
-   Contoh: jika klaim "Indonesia merdeka karena Amerika kalah perang", query harus memuat konteks klaim seperti "apakah amerika kalah perang kemerdekaan indonesia" atau "sejarah kemerdekaan indonesia kekalahan jepang amerika".
-   PRIORITASKAN query yang akan memunculkan hasil dari media arus utama terpercaya (contoh: CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia).
-   Untuk klaim bertopik EKONOMI, KEUANGAN, SAHAM, INVESTASI, atau PERBANKAN: prioritaskan kata kunci yang mengarahkan ke kanal pengumuman resmi OJK (ojk.go.id), Bursa Efek Indonesia/BEI (idx.co.id), KSEI (ksei.co.id), IDClear/KPEI (idclear.co.id), atau publikasi finansial kredibel.
-   Jika klaim mengklaim atau mempertanyakan kepemilikan/pendiri/direksi suatu perusahaan/emiten (contoh: "[Tokoh] pemilik [Perusahaan]"): sertakan kata kunci pencarian tentang struktur pemilik/pemegang saham resmi perusahaan tersebut (contoh: "pemilik pendiri pemegang saham [Perusahaan]"), agar data fakta resmi pemegang saham terambil untuk membantah atau mengonfirmasi klaim.
-   Hindari kata kunci generik yang memunculkan blog pribadi atau forum.
+3. Ekstrak inti klaim menjadi 1 kalimat query pencarian Google/berita yang efektif dalam Bahasa Indonesia:
+   - PENTING: Jangan menghapus predikat atau inti tuduhan/klausa utama yang sedang diklaim (seperti "kalah perang", "ditangkap", "meninggal", "palsu", "pemilik", "merdeka"). Mesin pencari membutuhkan kata kunci klausa tersebut untuk menemukan artikel klarifikasi atau bantahan fakta.
+   - NORMALISASI FORMAT ANGKA: Jika klaim memuat angka ribuan/jutaan tanpa pemisah (contoh "40000"), sertakan format penulisan berita Indonesia (contoh "40.000" atau "40 ribu") agar mesin pencari tidak gagal mencocokkan artikel pers.
+   - PENGEMBANGAN AKRONIM: Kembangkan akronim program pemerintah atau isu publik (contoh "MBG" -> "makan bergizi gratis", "IKN" -> "ibu kota nusantara").
+   - PRIORITASKAN query yang akan memunculkan hasil dari media arus utama terpercaya (CNN Indonesia, Kompas, Detik, Tempo, Antara News, Metro TV, Bloomberg Technoz, Liputan6, Tribunnews, Republika, Media Indonesia, BBC Indonesia).
+   - Untuk klaim bertopik EKONOMI, KEUANGAN, SAHAM, INVESTASI, atau PERBANKAN: prioritaskan kata kunci yang mengarahkan ke kanal pengumuman resmi OJK (ojk.go.id), Bursa Efek Indonesia/BEI (idx.co.id), KSEI (ksei.co.id), IDClear/KPEI (idclear.co.id), atau publikasi finansial kredibel.
+   - Jika klaim mempertanyakan kepemilikan/pendiri/direksi perusahaan/emiten: sertakan kata kunci pencarian tentang struktur pemilik/pemegang saham resmi perusahaan tersebut.
+   - Hindari kata kunci generik yang memunculkan blog pribadi atau forum.
 4. Hapus kata-kata ajakan klik ("klik link ini", "bagikan ke 5 grup", "ketik amin").
 5. JANGAN tambahkan penjelasan apapun, HANYA kembalikan teks query pencarian saja.`;
 
@@ -365,6 +366,122 @@ Tugas Anda:
   console.log(`[END] Query Extraction - Result: "${cleanedQuery}" (${duration}ms)`);
 
   return cleanedQuery;
+}
+
+export async function extractClaimEntities(
+  claimText: string,
+  config: AIProviderConfig | string,
+  modelFallback?: string
+): Promise<ArticleEntities> {
+  const providerConfig: AIProviderConfig = typeof config === "string" 
+    ? { openrouterApiKey: config, openrouterModel: modelFallback } 
+    : config;
+
+  console.log(`[AI Pipeline] Claim Entities Extraction (OpenRouter: ${providerConfig.openrouterModel || 'default'}, Groq: ${providerConfig.groqModel || 'default'})`);
+  console.log(`[START] Claim Entities Extraction (claim: "${claimText.slice(0, 60)}...")`);
+  const t0 = performance.now();
+
+  const systemPrompt = `Anda adalah asisten AI ekstraktor entitas klaim dan perancang kueri pencarian multi-sudut untuk fact-checking Indonesia (Saring Opini).
+Tugas Anda:
+1. Baca klaim pengguna (bisa berupa teks singkat, kritik kebijakan, isu viral, pesan broadcast, atau pertanyaan).
+2. Identifikasi dan ekstrak entitas kunci kejadian:
+   - event: nama peristiwa/isu/kebijakan inti dalam Bahasa Indonesia (contoh: "keracunan program makan bergizi gratis mbg", "kemerdekaan indonesia kekalahan perang dunia 2", "utang luar negeri indonesia"). Sertakan predikat dan subjek.
+   - location: nama kota/kabupaten spesifik jika ada (contoh: "Pati", "Garut", "Surabaya"). Kosongkan "" jika lingkup nasional atau tidak disebut.
+   - people: nama tokoh/pejabat/pelaku/korban (contoh: ["Prabowo", "Jokowi"]).
+   - organizations: lembaga, kementerian, atau pengawas (contoh: ["Badan Gizi Nasional", "Kemenkes", "JPPI", "OJK", "BEI"]).
+   - numbers: angka atau kuantitas yang diklaim (contoh: ["40000", "40.000", "40 ribu"]). Jika ada angka polos tanpa titik, sertakan juga variasi penulisan jurnalistiknya ("40.000", "40 ribu").
+   - dates: tanggal, tahun, atau periode waktu.
+3. ATURAN GENERASI 3 KUERI PENCARIAN JURNALISTIK:
+   - queryA (Kueri Jurnalistik Spesifik + Normalisasi Angka & Akronim):
+     Kombinasikan peristiwa inti + perluasan akronim (seperti "MBG" -> "makan bergizi gratis") + variasi penulisan angka berita (seperti "40 ribu" atau "40.000").
+     Contoh: "korban keracunan program makan bergizi gratis mbg 40 ribu".
+   - queryB (Kueri Peristiwa Inti Tanpa Keterikatan Angka Kaku - WAJIB):
+     Kueri yang berfokus pada peristiwa/isu pokok dan subjek TANPA memaksakan angka spesifik. Hal ini sangat krusial agar jika angka pengguna adalah estimasi/pembulatan wajar (misal "40000"), laporan berita investigasi dengan angka persis (misal "40.759") tetap berhasil ditemukan.
+     Contoh: "korban keracunan program makan bergizi gratis mbg".
+   - queryC (Kueri Cek Fakta, Rilis Resmi & Laporan Pemantau):
+     Kueri untuk menemukan artikel cek fakta, bantahan, atau laporan monitoring lembaga resmi/independen (contoh: JPPI, Kemenkes, BPK, Tempo Cek Fakta).
+     Contoh: "cek fakta keracunan program makan bergizi gratis mbg".
+   - Format: 4-8 kata kunci jurnalistik padat untuk media arus utama (Kompas, Detik, Tempo, CNN Indonesia, Antara, BBC Indonesia, dll.).
+
+Output WAJIB berupa JSON valid:
+{
+  "event": string,
+  "location": string,
+  "people": string[],
+  "organizations": string[],
+  "numbers": string[],
+  "dates": string[],
+  "queryA": string,
+  "queryB": string,
+  "queryC": string
+}`;
+
+  const userPrompt = `TEKS KLAIM PENGGUNA:\n"""\n${claimText.slice(0, 3000)}\n"""`;
+
+  try {
+    const rawJson = await callAIWithFallback(
+      providerConfig,
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      true
+    );
+
+    const cleaned = rawJson.replace(/^```json\s*|\s*```$/g, "").trim();
+    const parsed = JSON.parse(cleaned) as ArticleEntities;
+
+    const duration = (performance.now() - t0).toFixed(0);
+    console.log(`[END] Claim Entities Extraction - Event: "${parsed.event || 'N/A'}", Loc: "${parsed.location || 'N/A'}" (${duration}ms)`);
+    console.log(`[Queries Generated] A: "${parsed.queryA}", B: "${parsed.queryB}", C: "${parsed.queryC}"`);
+
+    const cleanClaim = claimText.replace(/[^\w\s]/gi, " ").trim();
+    const defaultQuery = cleanClaim.slice(0, 100);
+
+    return {
+      event: parsed.event || cleanClaim,
+      location: parsed.location || "",
+      people: Array.isArray(parsed.people) ? parsed.people : [],
+      organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
+      numbers: Array.isArray(parsed.numbers) ? parsed.numbers : [],
+      dates: Array.isArray(parsed.dates) ? parsed.dates : [],
+      queryA: parsed.queryA || defaultQuery,
+      queryB: parsed.queryB || parsed.queryA || defaultQuery,
+      queryC: parsed.queryC || `cek fakta ${defaultQuery}`,
+    };
+  } catch (err) {
+    const duration = (performance.now() - t0).toFixed(0);
+    console.warn(`[END] Claim Entities Extraction - Fallback used (${duration}ms):`, err instanceof Error ? err.message : err);
+
+    const digits = claimText.match(/\b\d+\b/g) || [];
+    const expandedNumbers: string[] = [];
+    digits.forEach((d) => {
+      expandedNumbers.push(d);
+      if (d.length >= 4) {
+        const withDot = d.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+        expandedNumbers.push(withDot);
+        const numVal = parseInt(d, 10);
+        if (numVal >= 1000 && numVal < 1000000) {
+          expandedNumbers.push(`${Math.round(numVal / 1000)} ribu`);
+        }
+      }
+    });
+
+    const cleanClaim = claimText.replace(/[^\w\s]/gi, " ").trim();
+    const eventWithoutNumbers = cleanClaim.replace(/\b\d+\b/g, "").replace(/\s+/g, " ").trim();
+
+    return {
+      event: eventWithoutNumbers || cleanClaim,
+      location: "",
+      people: [],
+      organizations: [],
+      numbers: expandedNumbers,
+      dates: [],
+      queryA: cleanClaim,
+      queryB: eventWithoutNumbers || cleanClaim,
+      queryC: `cek fakta ${eventWithoutNumbers || cleanClaim}`,
+    };
+  }
 }
 
 export async function analyzeFactClaim(
@@ -412,11 +529,28 @@ CRITICAL LOGICAL & SEMANTIC ENTAILMENT RULES:
    - If ALL available sources are Tier 3, return "TIDAK_DAPAT_DIPASTIKAN".
    - If Tier 1/2 sources conflict with Tier 3 sources, DISREGARD the Tier 3 sources entirely.
    - confidenceScore should be capped lower (max ~50) when the best available source is only Tier 2, and further capped (max ~20) if any Tier 3 source is mixed in.
-5. STATUS DEFINITIONS:
-   - "FAKTA": The claim in its entirety is completely accurate, supported by verified facts, and contains no false premises or inversions. (ringkasanFakta must contain 1-3 confirmed key facts).
+5. STATISTICAL & NUMERICAL APPROXIMATION TOLERANCE:
+   - In Indonesian public discourse, citizen reports, and journalism, large figures are frequently rounded or colloquially estimated (e.g. "40.000" or "40 ribu" for an official report of "40.759" or "50.059", or "8.000 triliun" for "8.041 triliun").
+   - If the underlying incident/program actually occurred, is verified by credible reporting or official monitoring data, and the claimed statistic is of the same order of magnitude / close approximation to the reported facts (e.g. claim: 40000 korban MBG, sources: JPPI reports 40.759 korban MBG or Kemenkes reports 50.059 korban):
+     You MUST classify as "FAKTA". In "alasan" and "ringkasanFakta", clarify the exact reported statistics (e.g. "Klaim terverifikasi: data monitoring JPPI mencatat 40.759 korban dugaan keracunan MBG, sehingga angka 40.000 merupakan pembulatan wajar.").
+   - NEVER classify a claim as "HOAX" merely due to standard rounding or format variations (e.g. writing 40000 instead of 40.759).
+   - Only classify as "HOAX" for statistics if:
+     (a) The figure is fabricated by extreme orders of magnitude (e.g. claiming 1.000.000 korban when there were only 5).
+     (b) The claim asserts casualties, funds, or events when official investigations confirmed zero or fabricated.
+     (c) The event itself never occurred.
+6. STRICT TOPIC INTEGRITY & DISREGARD UNRELATED EVENTS:
+   - NEVER compare a claim against an unrelated incident in the provided articles. For example, if the claim is about "Keracunan MBG / Makan Bergizi Gratis" and an article discusses "Keracunan sate jebred", that article is completely irrelevant. You must NOT cite the 52 victims of sate jebred to refute 40000 victims of MBG.
+   - If NONE of the provided articles discuss the claimed subject/event/policy, you MUST return "TIDAK_DAPAT_DIPASTIKAN". Do NOT manufacture a "HOAX" verdict when relevant evidence is absent.
+7. ABSOLUTE OBJECTIVITY ON PUBLIC POLICY & GOVERNMENT ISSUES:
+   - Maintain strict political neutrality.
+   - When evaluating claims regarding government programs, public controversies, or policies (e.g. Makan Bergizi Gratis/MBG, IKN, food estate, utang negara, bansos):
+     Base your decision strictly on verified reporting from credible Tier 1 media and watchdog reports (e.g. JPPI, Ombudsman, BPK, KPK, Kemenkes).
+     Do not dismiss public criticism as "HOAX" without verified contrary evidence.
+8. STATUS DEFINITIONS:
+   - "FAKTA": The claim in its entirety is completely accurate or a reasonable approximation of verified facts, supported by evidence, and contains no false premises or inversions. (ringkasanFakta must contain 1-3 confirmed key facts).
    - "HOAX": The claim contains factually false statements, inverted facts (e.g. claiming the victor lost, or asserting fake causes), fabricated events, or has been debunked. (ringkasanFakta must contain 1-3 counter-facts or debunking evidence points).
    - "TIDAK_DAPAT_DIPASTIKAN": Evidence is conflicting or insufficient to draw a definitive conclusion. Return "ringkasanFakta": [].
-6. ALASAN & RINGKASAN FAKTA:
+9. ALASAN & RINGKASAN FAKTA:
    - In "alasan", clearly explain the logical and factual reasoning. Explicitly state why a premise is false or inverted if applicable (e.g. "Amerika Serikat memenangkan Perang Dunia II, sedangkan Jepang yang kalah").
    - In "ringkasanFakta", list 1-3 concise factual bullet points.
 
