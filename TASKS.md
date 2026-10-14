@@ -427,6 +427,19 @@ Status:
     - `npx tsx lib/__tests__/economic_classification.test.ts` ✅ (16/16 tes lulus)
     - `npx tsx lib/__tests__/schemas.test.ts` ✅ (5/5 tes lulus)
     - `npm run build` ✅ (Turbopack production build berhasil 0 error)
+- [x] Penghapusan Folder Berkas dari Repositori GitHub & Penambahan ke .gitignore
+  - Date: 2026-10-14
+  - Files:
+    - [.gitignore](file:///d:/KULIAH/Kompres/.gitignore)
+    - [Berkas/](file:///d:/KULIAH/Kompres/Berkas)
+  - Notes:
+    - Menghapus tracking folder `Berkas/` dari Git index menggunakan `git rm -r --cached Berkas` sehingga folder terhapus dari repositori GitHub tanpa menyentuh atau menghapus berkas fisik di direktori lokal pengguna.
+    - Menambahkan `Berkas/` ke [.gitignore](file:///d:/KULIAH/Kompres/.gitignore) agar berkas dokumen perlombaan/panduan tidak terlacak kembali secara otomatis.
+    - Melakukan commit dan push pembaruan ke repositori remote GitHub (`main`).
+  - Verification:
+    - `git status` ✅ (working tree clean)
+    - `list_dir Berkas/` ✅ (Seluruh 5 berkas lokal tetap utuh)
+    - `git push origin main` ✅ (Sukses ter-push ke GitHub)
 
 
 
